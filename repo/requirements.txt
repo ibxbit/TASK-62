@@ -1,0 +1,18 @@
+# Test runner
+pytest==8.3.4
+pytest-timeout==2.3.1
+
+# HTTP client for API tests
+requests==2.32.3
+
+# PostgreSQL driver (used in API_tests/conftest.py to create test users)
+psycopg2-binary==2.9.10
+
+# AES-GCM encryption (matches the Rust AES-256-GCM used for field encryption)
+cryptography==43.0.3
+
+# Argon2 password hashing (matches Rust argon2 0.5 — same PHC format and defaults)
+argon2-cffi==23.1.0
+
+# HMAC / SHA utilities (matches Rust hmac + sha2 crates)
+# (stdlib hmac + hashlib covers all cases — no extra packages needed)

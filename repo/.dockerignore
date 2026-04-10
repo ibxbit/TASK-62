@@ -1,0 +1,34 @@
+# Git
+.git
+.gitignore
+
+# Build output (never copy to Docker context)
+target/
+
+# Local environment overrides
+.env
+.env.local
+
+# IDE / OS artefacts
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Python test caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+
+# Frontend WASM build output
+frontend/dist/
+frontend/pkg/
+
+# Documentation
+*.md
+!README.md
+
+# Claude Code project files
+.claude/

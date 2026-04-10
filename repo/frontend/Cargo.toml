@@ -1,0 +1,43 @@
+[package]
+name    = "transitops-frontend"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "transitops-frontend"
+path = "src/main.rs"
+
+[dependencies]
+yew              = { version = "0.21", features = ["csr"] }
+yew-router       = "0.18"
+gloo-net         = "0.5"
+gloo-timers      = "0.3"
+serde            = { version = "1",   features = ["derive"] }
+serde_json       = "1"
+uuid             = { version = "1",   features = ["serde", "v4"] }
+chrono           = { version = "0.4", features = ["serde", "wasmbind"] }
+wasm-bindgen-futures = "0.4"
+web-sys          = { version = "0.3", features = [
+    "Window", "Storage", "Location",
+    "Blob", "File", "FileList", "FileReader",
+    "HtmlInputElement", "HtmlSelectElement",
+    "ProgressEvent",
+] }
+js-sys           = "0.3"
+log              = "0.4"
+console_log      = "1"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[[test]]
+name    = "component_states"
+path    = "tests/component_states.rs"
+
+[profile.release]
+opt-level     = "z"   # minimise wasm binary size
+lto           = true
+codegen-units = 1

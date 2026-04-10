@@ -1,0 +1,65 @@
+version: '3.9'
+
+# =============================================================================
+# TransitOps — One-click development stack
+#
+#   docker compose up          # start everything
+#   docker compose up --build  # rebuild the API image first
+#   docker compose down -v     # stop and remove volumes
+#
+# Services
+# --------
+#   db   → PostgreSQL 16      localhost:5432
+#   api  → Actix-web backend  localhost:8080
+# =============================================================================
+
+services:
+
+  # ── PostgreSQL 16 ──────────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      # POSTGRES_USER becomes the database superuser AND the application role.
+      # The init script relies on this user matching the one expected in schema.sql.
+      POSTGRES_USER:     transitops_app
+      POSTGRES_PASSWORD: transitops_secret
+      POSTGRES_DB:       transitops
+    ports:
+      - "5432:5432"
+    volumes:
+      # Persistent data volume — survives container restarts
+      - db_data:/var/lib/postgresql/data
+      # Initialisation script (runs once on first start — skipped if data volume exists)
+      - ./db/init/00_init.sh:/docker-entrypoint-initdb.d/00_init.sh:ro
+      # SQL files mounted for the init script to reference
+      - ./db:/opt/transitops/db:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U transitops_app -d transitops"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  # ── TransitOps API ─────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL:   postgres://transitops_app:transitops_secret@db:5432/transitops
+      # 64-hex-character (32-byte) AES-256 key — CHANGE IN PRODUCTION
+      ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      SERVER_HOST:    0.0.0.0
+      SERVER_PORT:    "8080"
+      RUST_LOG:       info
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db_data:
+    driver: local
