@@ -244,8 +244,8 @@ fn build_map() -> HashMap<&'static str, PermSet> {
     m.insert(ROLE_STAFF_USER, HashSet::from([
         // Read-only operational access
         OpsRoutesRead, OpsTripsRead,
-        // Own inbox + DND only (no subscription management)
-        NotificationsInboxRead, NotificationsDndManage,
+        // Own inbox, DND, and subscription management
+        NotificationsInboxRead, NotificationsDndManage, NotificationsSubscriptionsManage,
         // Basic reporting
         ReportingRead,
     ]));

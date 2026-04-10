@@ -148,15 +148,16 @@ JOIN   auth.permissions p ON p.name IN (
 WHERE r.name = 'finance_analyst'
 ON CONFLICT DO NOTHING;
 
--- ---- Staff User (5 permissions) ----
+-- ---- Staff User (6 permissions) ----
 INSERT INTO auth.role_permissions (role_id, permission_id)
 SELECT r.id, p.id
 FROM   auth.roles r
 JOIN   auth.permissions p ON p.name IN (
     -- Read-only ops
     'ops:routes:read', 'ops:trips:read',
-    -- Own inbox + DND
+    -- Own inbox, DND, and subscription management
     'notifications:inbox:read', 'notifications:dnd:manage',
+    'notifications:subscriptions:manage',
     -- Basic reporting
     'reporting:reports:read'
 )

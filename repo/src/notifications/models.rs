@@ -1,6 +1,26 @@
 use chrono::{DateTime, NaiveTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
+
+/// Deserialize an `Option<NaiveTime>` accepting both `"HH:MM"` and `"HH:MM:SS"` string formats.
+/// chrono's default NaiveTime parser requires seconds, but test clients send short form.
+fn deserialize_opt_naive_time<'de, D>(de: D) -> Result<Option<NaiveTime>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let opt: Option<String> = Option::deserialize(de)?;
+    match opt {
+        None => Ok(None),
+        Some(s) => {
+            NaiveTime::parse_from_str(&s, "%H:%M:%S")
+                .or_else(|_| NaiveTime::parse_from_str(&s, "%H:%M"))
+                .map(Some)
+                .map_err(|e| serde::de::Error::custom(
+                    format!("invalid time '{}': {}. Use HH:MM or HH:MM:SS format", s, e)
+                ))
+        }
+    }
+}
 
 // ============================================================
 // Shared bus type (used by bus.rs and rules.rs)
@@ -52,9 +72,11 @@ pub struct DeliveryQuery {
 #[derive(Deserialize)]
 pub struct UpdatePreferencesRequest {
     pub dnd_enabled: bool,
-    /// UTC time window start (e.g. "22:00:00"). Both fields required together,
+    /// UTC time window start. Accepts "HH:MM" or "HH:MM:SS". Both fields required together,
     /// or both omitted for all-day DND.
+    #[serde(default, deserialize_with = "deserialize_opt_naive_time")]
     pub dnd_start:   Option<NaiveTime>,
+    #[serde(default, deserialize_with = "deserialize_opt_naive_time")]
     pub dnd_end:     Option<NaiveTime>,
 }
 
