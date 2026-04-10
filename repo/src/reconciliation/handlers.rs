@@ -234,6 +234,11 @@ pub async fn start_run(
     let session = session.0;
     session.require(Permission::PaymentsReconciliationRun)?;
 
+    // Validate run_date is present now that RBAC + reauth checks have passed.
+    let run_date = body.run_date.ok_or_else(|| {
+        AppError::BadRequest("run_date is required".to_string())
+    })?;
+
     // ---- Verify the import exists and is in a usable state ----
     let import = sqlx::query!(
         "SELECT status, file_hash, raw_content_encrypted FROM payments.statement_imports WHERE id = $1",
@@ -276,7 +281,7 @@ pub async fn start_run(
     // ---- Run the engine ----
     let output = engine::run(
         &state.db,
-        body.run_date,
+        run_date,
         body.statement_import_id,
         &parse.records,
         session.user_id,

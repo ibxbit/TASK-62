@@ -814,11 +814,13 @@ pub async fn upsert_channel_pref(
         )));
     }
 
-    let addr = body.channel_address.trim();
-    if addr.is_empty() {
-        return Err(AppError::BadRequest(
-            "channel_address must not be empty".to_string(),
-        ));
+    let addr = body.channel_address.as_deref().map(str::trim);
+    if let Some(a) = addr {
+        if a.is_empty() {
+            return Err(AppError::BadRequest(
+                "channel_address must not be empty".to_string(),
+            ));
+        }
     }
 
     let enabled = body.enabled.unwrap_or(true);
@@ -827,10 +829,10 @@ pub async fn upsert_channel_pref(
         r#"
         INSERT INTO notifications.channel_preferences
             (user_id, channel, enabled, channel_address, updated_at)
-        VALUES ($1, $2, $3, $4, now())
+        VALUES ($1, $2, $3, COALESCE($4, ''), now())
         ON CONFLICT (user_id, channel) DO UPDATE
             SET enabled         = EXCLUDED.enabled,
-                channel_address = EXCLUDED.channel_address,
+                channel_address = COALESCE($4, channel_preferences.channel_address),
                 updated_at      = now()
         RETURNING channel, enabled, channel_address, updated_at
         "#,

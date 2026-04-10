@@ -253,8 +253,11 @@ pub const VALID_CHANNELS: &[&str] = &["email", "sms", "wecom"];
 #[derive(Deserialize)]
 pub struct UpsertChannelRequest {
     /// Delivery address: email address | E.164 phone | WeCom user ID.
-    pub channel_address: String,
+    /// Omit to keep the existing address (update-only mode).
+    pub channel_address: Option<String>,
     /// Whether this channel is active (default: `true`).
+    /// Accepts both `enabled` and `is_enabled` for client compatibility.
+    #[serde(alias = "is_enabled")]
     pub enabled:         Option<bool>,
 }
 

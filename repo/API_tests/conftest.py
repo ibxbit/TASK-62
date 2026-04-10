@@ -186,6 +186,27 @@ def _login(username: str, password: str) -> str:
     return data["token"]
 
 
+def _reauth(token: str, password: str) -> None:
+    """Perform re-authentication on an existing session token.
+
+    This stamps ``last_reauth_at`` on the session so that ReauthGuard-gated
+    endpoints can be reached during RBAC tests.  The reauth window is 10
+    minutes; as long as the full test suite finishes within that window the
+    session-level tokens remain valid for all reauth-gated RBAC checks.
+    """
+    resp = requests.post(
+        f"{API_URL}/auth/reauth",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"password": password},
+        timeout=15,
+    )
+    # A non-200 response is not fatal here — the RBAC tests that need reauth
+    # will simply fail with 403, which makes the problem obvious.
+    if resp.status_code != 200:
+        import warnings
+        warnings.warn(f"Reauth during fixture setup returned {resp.status_code}: {resp.text}")
+
+
 # ── Session-scoped fixture: shared state across all API tests ─────────────────
 
 @pytest.fixture(scope="session")
@@ -207,10 +228,17 @@ def test_user_ids(db_conn):
 
 @pytest.fixture(scope="session")
 def tokens(test_user_ids):
-    """Session tokens keyed by role: admin, finance, dispatcher, staff."""
+    """Session tokens keyed by role: admin, finance, dispatcher, staff.
+
+    After login, each token is immediately re-authenticated so that
+    ReauthGuard-gated endpoints return non-403 responses in RBAC tests.
+    The 10-minute reauth window is wide enough for the full test suite.
+    """
     result = {}
     for role_key, spec in TEST_USERS.items():
-        result[role_key] = _login(spec["username"], spec["password"])
+        token = _login(spec["username"], spec["password"])
+        _reauth(token, spec["password"])
+        result[role_key] = token
     return result
 
 

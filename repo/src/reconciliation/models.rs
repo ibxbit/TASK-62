@@ -179,7 +179,14 @@ pub struct ReconciliationItemRow {
 /// POST /reconciliation/runs
 #[derive(Debug, Deserialize)]
 pub struct StartRunRequest {
-    pub run_date:             NaiveDate,
+    /// The calendar date to reconcile.  Required for actual runs; missing
+    /// date is caught by the handler with a 400 rather than a 422 so that
+    /// the RBAC / reauth check fires first.
+    #[serde(default)]
+    pub run_date:             Option<NaiveDate>,
+    /// UUID of the previously uploaded statement import.
+    /// Accepts the short alias `statement_id` for API client convenience.
+    #[serde(alias = "statement_id")]
     pub statement_import_id:  Uuid,
     /// Optional SHA-256 fingerprint the caller expects the file to have.
     /// When provided, verified before reconciliation begins.

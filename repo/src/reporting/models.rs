@@ -124,9 +124,17 @@ pub struct MetricQuery {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateMetricRequest {
+    /// Unique key for this metric. Accepts `name` as an alias.
+    #[serde(alias = "name")]
     pub metric_key:     String,
+    /// Human-readable display name. Defaults to empty string when omitted;
+    /// the handler validates it is non-empty before inserting.
+    #[serde(default)]
     pub display_name:   String,
     pub description:    Option<String>,
+    /// Formula type. Defaults to empty string when omitted;
+    /// the handler validates it is one of the supported types.
+    #[serde(default)]
     pub formula_type:   String,
     pub dimension_keys: Option<Vec<String>>,
     pub config:         Option<Value>,

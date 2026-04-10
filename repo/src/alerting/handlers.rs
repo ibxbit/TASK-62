@@ -29,6 +29,35 @@ pub async fn list_alerts(
 ) -> Result<HttpResponse, AppError> {
     session.require(Permission::AlertsRead)?;
 
+    const VALID_STATUSES:    &[&str] = &["open", "acknowledged", "closed"];
+    const VALID_SEVERITIES:  &[&str] = &["info", "warning", "critical"];
+    const VALID_ALERT_TYPES: &[&str] = &["reconciliation_mismatch", "kpi_anomaly"];
+
+    if let Some(s) = &query.status {
+        if !VALID_STATUSES.contains(&s.as_str()) {
+            return Err(AppError::BadRequest(format!(
+                "Invalid status '{}'; must be one of: open, acknowledged, closed",
+                s
+            )));
+        }
+    }
+    if let Some(s) = &query.severity {
+        if !VALID_SEVERITIES.contains(&s.as_str()) {
+            return Err(AppError::BadRequest(format!(
+                "Invalid severity '{}'; must be one of: info, warning, critical",
+                s
+            )));
+        }
+    }
+    if let Some(s) = &query.alert_type {
+        if !VALID_ALERT_TYPES.contains(&s.as_str()) {
+            return Err(AppError::BadRequest(format!(
+                "Invalid alert_type '{}'; must be one of: reconciliation_mismatch, kpi_anomaly",
+                s
+            )));
+        }
+    }
+
     let limit  = query.limit.unwrap_or(50).clamp(1, 200);
     let offset = query.offset.unwrap_or(0).max(0);
 
