@@ -174,13 +174,11 @@ pub fn validate_timestamp(ts_secs: i64) -> Result<(), ReplayError> {
 /// the INSERT.
 pub async fn check_nonce_fresh(pool: &PgPool, nonce: &str) -> Result<(), ReplayError> {
     let exists: bool = sqlx::query_scalar!(
-        "SELECT EXISTS(SELECT 1 FROM payments.callbacks WHERE nonce = $1)",
+        "SELECT EXISTS(SELECT 1 FROM payments.callbacks WHERE nonce = $1) as \"exists!\"",
         nonce,
     )
     .fetch_one(pool)
     .await
-    .ok()
-    .flatten()
     .unwrap_or(false);
 
     if exists {

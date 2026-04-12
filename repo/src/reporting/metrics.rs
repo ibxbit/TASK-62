@@ -78,7 +78,7 @@ async fn compute_on_time_departure_rate(
         total:        i64,
     }
 
-    let rows = sqlx::query_as!(
+    let rows: Vec<Row> = sqlx::query_as!(
         Row,
         r#"
         SELECT

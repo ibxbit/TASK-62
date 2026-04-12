@@ -190,7 +190,7 @@ pub async fn process_import_file(
 
         // Attempt to match by transaction_ref → idempotency_key
         let matched_id: Option<Uuid> = if let Some(ref txn_ref) = line.transaction_ref {
-            let matched_id: Option<Uuid> = sqlx::query_scalar!(
+            sqlx::query_scalar!(
                 "SELECT id FROM payments.transactions WHERE idempotency_key = $1 LIMIT 1",
                 txn_ref,
             )
@@ -210,7 +210,7 @@ pub async fn process_import_file(
                 .map(|dt| chrono::DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc));
 
             if let (Some(start), Some(end)) = (day_start, day_end) {
-                let matched_id: Option<Uuid> = sqlx::query_scalar!(
+                sqlx::query_scalar!(
                                         r#"
                                         SELECT id FROM payments.transactions
                                         WHERE amount    = $1

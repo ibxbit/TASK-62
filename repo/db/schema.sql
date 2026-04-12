@@ -1,9 +1,14 @@
 -- =============================================================================
 -- TransitOps Backoffice Platform — PostgreSQL Schema
 -- =============================================================================
+-- Tables are created in strict dependency order so this file can be applied
+-- to a clean database without errors.
+-- Migrations (db/migrations/*.sql) extend this base schema with additional
+-- columns, indexes, and tables.
+-- =============================================================================
 
 -- ---------------------------------------------------------------------------
--- Ensure all schemas exist before creating tables in them
+-- Schemas
 -- ---------------------------------------------------------------------------
 CREATE SCHEMA IF NOT EXISTS auth;
 CREATE SCHEMA IF NOT EXISTS ops;
@@ -11,36 +16,23 @@ CREATE SCHEMA IF NOT EXISTS notifications;
 CREATE SCHEMA IF NOT EXISTS payments;
 CREATE SCHEMA IF NOT EXISTS reporting;
 CREATE SCHEMA IF NOT EXISTS audit;
+CREATE SCHEMA IF NOT EXISTS scheduler;
 
--- Ensure the transitops_app user and database exist (idempotent)
+-- Ensure the transitops_app role exists (idempotent)
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'transitops_app') THEN
         CREATE ROLE transitops_app LOGIN PASSWORD 'transitops_secret';
     END IF;
-    IF NOT EXISTS (SELECT FROM pg_database WHERE datname = 'transitops') THEN
-        CREATE DATABASE transitops OWNER transitops_app;
-    END IF;
 END$$;
 
 
--- ...existing code...
-
-
--- ...existing code...
-
-
--- ...existing code...
-
-
-
--- ...existing code...
-
-
-
+-- =============================================================================
+-- SCHEMA: auth
+-- =============================================================================
 
 -- ---------------------------------------------------------------------------
--- roles
+-- auth.roles
 -- ---------------------------------------------------------------------------
 CREATE TABLE auth.roles (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -49,54 +41,42 @@ CREATE TABLE auth.roles (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ---------------------------------------------------------------------------
+-- auth.permissions
+-- ---------------------------------------------------------------------------
+CREATE TABLE auth.permissions (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     name        VARCHAR(128) NOT NULL UNIQUE,  -- e.g. ops:trips:write
     domain      VARCHAR(64)  NOT NULL,         -- ops | payments | notifications | reporting | audit
     action      VARCHAR(32)  NOT NULL,         -- read | write | delete | admin
     description TEXT,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
 -- ---------------------------------------------------------------------------
--- role_permissions  (M:N junction)
--- ---------------------------------------------------------------------------
-CREATE TABLE auth.role_permissions (
-    role_id       UUID NOT NULL REFERENCES auth.roles(id) ON DELETE CASCADE,
-    permission_id UUID NOT NULL REFERENCES auth.permissions(id) ON DELETE CASCADE,
-);
-CREATE INDEX idx_txn_trip_id    ON payments.transactions(trip_id);
-CREATE INDEX idx_txn_status     ON payments.transactions(status);
-CREATE INDEX idx_txn_created_at ON payments.transactions(created_at DESC);
-CREATE INDEX idx_txn_collected_by ON payments.transactions(collected_by);
-    granted_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
--- ---------------------------------------------------------------------------
--- users
--- Sensitive PII (email, full_name) stored encrypted via pgp_sym_encrypt.
--- Application supplies symmetric key at query time.
+-- auth.users
+-- Sensitive PII (email, full_name) stored encrypted via application layer.
 -- ---------------------------------------------------------------------------
 CREATE TABLE auth.users (
-    id                 UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    username           VARCHAR(64) NOT NULL UNIQUE,
-    -- email and full_name are application-encrypted (pgp_sym_encrypt); stored as BYTEA
-);
-CREATE INDEX idx_subscriptions_user_event ON notifications.subscriptions(user_id, event_type)
-     WHERE is_active = TRUE;
-    email_encrypted    BYTEA       NOT NULL,
-    is_active          BOOLEAN     NOT NULL DEFAULT TRUE,
-    last_login_at      TIMESTAMPTZ,
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    username            VARCHAR(64) NOT NULL UNIQUE,
+    password_hash       TEXT        NOT NULL,
+    role_id             UUID        NOT NULL REFERENCES auth.roles(id),
+    -- email stored encrypted (pgp_sym_encrypt); BYTEA
+    email_encrypted     BYTEA       NOT NULL,
+    is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
+    last_login_at       TIMESTAMPTZ,
     password_changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    deleted_at         TIMESTAMPTZ,            -- soft delete
-    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+    deleted_at          TIMESTAMPTZ,            -- soft delete
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_users_role_id   ON auth.users(role_id);
 CREATE INDEX idx_users_is_active ON auth.users(is_active) WHERE deleted_at IS NULL;
-);
-CREATE INDEX idx_deliveries_event_id    ON notifications.deliveries(event_id);
-CREATE INDEX idx_deliveries_created_at  ON notifications.deliveries(created_at DESC);
 
 -- ---------------------------------------------------------------------------
--- sessions
+-- auth.sessions
 -- ---------------------------------------------------------------------------
 CREATE TABLE auth.sessions (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -114,13 +94,22 @@ CREATE TABLE auth.sessions (
 CREATE INDEX idx_sessions_user_id    ON auth.sessions(user_id);
 CREATE INDEX idx_sessions_expires_at ON auth.sessions(expires_at) WHERE revoked_at IS NULL;
 
+-- ---------------------------------------------------------------------------
+-- auth.role_permissions  (M:N junction)
+-- ---------------------------------------------------------------------------
+CREATE TABLE auth.role_permissions (
+    role_id       UUID NOT NULL REFERENCES auth.roles(id)       ON DELETE CASCADE,
+    permission_id UUID NOT NULL REFERENCES auth.permissions(id) ON DELETE CASCADE,
+    PRIMARY KEY (role_id, permission_id)
+);
+
 
 -- =============================================================================
 -- SCHEMA: ops
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
--- routes
+-- ops.routes
 -- ---------------------------------------------------------------------------
 CREATE TABLE ops.routes (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -129,6 +118,7 @@ CREATE TABLE ops.routes (
     description TEXT,
     status      VARCHAR(16)  NOT NULL DEFAULT 'draft'
                              CHECK (status IN ('draft','active','inactive')),
+    depot_id    UUID,
     deleted_at  TIMESTAMPTZ,
     created_by  UUID        NOT NULL REFERENCES auth.users(id),
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -138,7 +128,7 @@ CREATE TABLE ops.routes (
 CREATE INDEX idx_routes_status ON ops.routes(status) WHERE deleted_at IS NULL;
 
 -- ---------------------------------------------------------------------------
--- stops
+-- ops.stops
 -- ---------------------------------------------------------------------------
 CREATE TABLE ops.stops (
     id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -158,7 +148,48 @@ CREATE TABLE ops.stops (
 CREATE INDEX idx_stops_route_id ON ops.stops(route_id) WHERE deleted_at IS NULL;
 
 -- ---------------------------------------------------------------------------
--- trips
+-- ops.config_templates
+-- ---------------------------------------------------------------------------
+CREATE TABLE ops.config_templates (
+    id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    key          VARCHAR(128) NOT NULL UNIQUE,  -- e.g. 'fare_rules', 'schedule_policy'
+    domain       VARCHAR(64)  NOT NULL,
+    description  TEXT,
+    json_schema  JSONB,                          -- JSON Schema for payload validation
+    created_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+-- ---------------------------------------------------------------------------
+-- ops.config_versions
+-- ---------------------------------------------------------------------------
+CREATE TABLE ops.config_versions (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    template_id     UUID        NOT NULL REFERENCES ops.config_templates(id) ON DELETE RESTRICT,
+    version_number  INT         NOT NULL CHECK (version_number > 0),
+    status          VARCHAR(16) NOT NULL DEFAULT 'draft'
+                                CHECK (status IN ('draft','published','scheduled','archived')),
+    payload         JSONB       NOT NULL,
+    effective_from  TIMESTAMPTZ,
+    effective_to    TIMESTAMPTZ,
+    published_at    TIMESTAMPTZ,
+    published_by    UUID        REFERENCES auth.users(id),
+    scheduled_at    TIMESTAMPTZ,
+    created_by      UUID        NOT NULL REFERENCES auth.users(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (template_id, version_number),
+    CONSTRAINT config_versions_effective_range
+        CHECK (effective_to IS NULL OR effective_to > effective_from)
+);
+
+CREATE UNIQUE INDEX idx_config_one_published
+    ON ops.config_versions(template_id)
+    WHERE status = 'published';
+
+CREATE INDEX idx_config_versions_template ON ops.config_versions(template_id, status);
+
+-- ---------------------------------------------------------------------------
+-- ops.trips
 -- ---------------------------------------------------------------------------
 CREATE TABLE ops.trips (
     id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -185,112 +216,6 @@ CREATE INDEX idx_trips_scheduled_departure ON ops.trips(scheduled_departure);
 CREATE INDEX idx_trips_assigned_driver     ON ops.trips(assigned_driver_id) WHERE deleted_at IS NULL;
 
 -- ---------------------------------------------------------------------------
--- config_templates  — defines the shape/key of a configuration domain
--- ---------------------------------------------------------------------------
-CREATE TABLE ops.config_templates (
-    id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-    key          VARCHAR(128) NOT NULL UNIQUE,  -- e.g. 'fare_rules', 'schedule_policy'
-    domain       VARCHAR(64)  NOT NULL,
-    description  TEXT,
-    json_schema  JSONB,                          -- JSON Schema for payload validation
-    created_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
-);
-
--- ---------------------------------------------------------------------------
--- config_versions  — draft → published | scheduled | archived
--- Only one version per template may be 'published' at a time (partial unique index).
--- ---------------------------------------------------------------------------
-CREATE TABLE ops.config_versions (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    template_id     UUID        NOT NULL REFERENCES ops.config_templates(id) ON DELETE RESTRICT,
-    version_number  INT         NOT NULL CHECK (version_number > 0),
-    status          VARCHAR(16) NOT NULL DEFAULT 'draft'
-                                CHECK (status IN ('draft','published','scheduled','archived')),
-    payload         JSONB       NOT NULL,
-    effective_from  TIMESTAMPTZ,
-    effective_to    TIMESTAMPTZ,
-    published_at    TIMESTAMPTZ,
-    published_by    UUID        REFERENCES auth.users(id),
-    scheduled_at    TIMESTAMPTZ,
-    created_by      UUID        NOT NULL REFERENCES auth.users(id),
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (template_id, version_number),
-    CONSTRAINT config_versions_effective_range
-        CHECK (effective_to IS NULL OR effective_to > effective_from)
-);
-
--- Enforce single published version per template
-CREATE UNIQUE INDEX idx_config_one_published
-    ON ops.config_versions(template_id)
-    WHERE status = 'published';
-
-CREATE INDEX idx_config_versions_template ON ops.config_versions(template_id, status);
-
-
--- =============================================================================
--- SCHEMA: notifications
--- =============================================================================
-
--- ---------------------------------------------------------------------------
--- event_definitions  — registry of known event types
--- ---------------------------------------------------------------------------
-
-CREATE TABLE notifications.event_definitions (
-    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_type   VARCHAR(128) NOT NULL UNIQUE,  -- e.g. 'ops.trip.created'
-    domain       VARCHAR(64)  NOT NULL,
-    description  TEXT,
-    payload_schema JSONB,                        -- expected payload shape
-    severity     VARCHAR(16) DEFAULT 'info',     -- ADDED COLUMN
-    created_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
-);
--- ---------------------------------------------------------------------------
--- scheduler.job_runs
--- ---------------------------------------------------------------------------
-CREATE TABLE scheduler.job_runs (
-    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    job_name   VARCHAR(128) NOT NULL,
-    status     VARCHAR(32) NOT NULL,
-    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    finished_at TIMESTAMPTZ,
-    error      TEXT
-);
-
--- ---------------------------------------------------------------------------
--- payments.compensation_jobs
--- ---------------------------------------------------------------------------
-CREATE TABLE payments.compensation_jobs (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    job_type        TEXT        NOT NULL
-                                CHECK (job_type IN ('stuck_transactions', 'pending_refunds', 'callback_retry')),
-    status          TEXT        NOT NULL DEFAULT 'running'
-                                CHECK (status IN ('running', 'completed', 'failed')),
-    affected_count  INT         NOT NULL DEFAULT 0,
-    error_message   TEXT,
-    started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    completed_at    TIMESTAMPTZ,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX idx_comp_jobs_type   ON payments.compensation_jobs (job_type, created_at DESC);
-CREATE INDEX idx_comp_jobs_status ON payments.compensation_jobs (status);
--- ---------------------------------------------------------------------------
--- payments.reconciliation_entries (view) — cents-based projection for reporting
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE VIEW payments.reconciliation_entries AS
-SELECT
-    ri.id,
-    ri.transaction_id,
-    ROUND(ri.expected_amount * 100)::BIGINT AS expected_amount_cents,
-    ROUND(ri.actual_amount   * 100)::BIGINT AS settled_amount_cents,
-    rr.run_date::TIMESTAMPTZ               AS reconciled_at,
-    tx.route_id
-FROM payments.reconciliation_items ri
-JOIN payments.reconciliation_runs rr ON rr.id = ri.run_id
-LEFT JOIN payments.transactions  tx  ON tx.id = ri.transaction_id;
-
--- ---------------------------------------------------------------------------
 -- ops.rollout_stages
 -- ---------------------------------------------------------------------------
 CREATE TABLE ops.rollout_stages (
@@ -306,11 +231,30 @@ CREATE TABLE ops.rollout_stages (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+
+-- =============================================================================
+-- SCHEMA: notifications
+-- =============================================================================
+
 -- ---------------------------------------------------------------------------
--- events  — immutable event records emitted by domain services
+-- notifications.event_definitions
+-- ---------------------------------------------------------------------------
+CREATE TABLE notifications.event_definitions (
+    id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_type     VARCHAR(128) NOT NULL UNIQUE,  -- e.g. 'ops.trip.created'
+    domain         VARCHAR(64)  NOT NULL,
+    description    TEXT,
+    payload_schema JSONB,                          -- expected payload shape
+    severity       VARCHAR(16)  NOT NULL DEFAULT 'info'
+                                CHECK (severity IN ('info','warning','critical')),
+    created_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+-- ---------------------------------------------------------------------------
+-- notifications.events
 -- ---------------------------------------------------------------------------
 CREATE TABLE notifications.events (
-    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    id               UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     event_type       VARCHAR(128) NOT NULL
                          REFERENCES notifications.event_definitions(event_type)
                          ON UPDATE CASCADE ON DELETE RESTRICT,
@@ -318,58 +262,19 @@ CREATE TABLE notifications.events (
     source_entity_id UUID,
     actor_id         UUID,                   -- user who triggered; nullable for system events
     payload          JSONB        NOT NULL DEFAULT '{}',
+    severity         VARCHAR(16)  NOT NULL DEFAULT 'info'
+                                  CHECK (severity IN ('info','warning','critical')),
+    processed_at     TIMESTAMPTZ,
     created_at       TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_events_event_type  ON notifications.events(event_type);
 CREATE INDEX idx_events_created_at  ON notifications.events(created_at DESC);
 CREATE INDEX idx_events_entity      ON notifications.events(source_domain, source_entity_id);
+CREATE INDEX idx_events_pending     ON notifications.events(created_at ASC) WHERE processed_at IS NULL;
 
 -- ---------------------------------------------------------------------------
--- subscriptions  — per-user channel subscriptions per event type
-    user_id     UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-    event_type  VARCHAR(128) NOT NULL
-                    REFERENCES notifications.event_definitions(event_type)
-                    ON UPDATE CASCADE ON DELETE CASCADE,
-    channel     VARCHAR(16)  NOT NULL CHECK (channel IN ('inbox','email','sms','wecom')),
-    is_active   BOOLEAN      NOT NULL DEFAULT TRUE,
-    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
-
-CREATE INDEX idx_subscriptions_user_event ON notifications.subscriptions(user_id, event_type)
-    WHERE is_active = TRUE;
-
--- ---------------------------------------------------------------------------
--- deliveries  — one row per (event × user × channel) delivery attempt
--- ---------------------------------------------------------------------------
-CREATE TABLE notifications.deliveries (
-    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    status        VARCHAR(16) NOT NULL DEFAULT 'pending'
-                              CHECK (status IN ('pending','sent','delivered','failed','suppressed')),
-    sent_at       TIMESTAMPTZ,
-    delivered_at  TIMESTAMPTZ,
-    read_at       TIMESTAMPTZ,
-    retry_count   SMALLINT    NOT NULL DEFAULT 0,
-    error_message TEXT,
-CREATE INDEX idx_deliveries_event_id    ON notifications.deliveries(event_id);
-CREATE INDEX idx_deliveries_created_at  ON notifications.deliveries(created_at DESC);
-
--- ---------------------------------------------------------------------------
--- inbox_messages  — materialised inbox view per user
--- ---------------------------------------------------------------------------
-CREATE TABLE notifications.inbox_messages (
-    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id     UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-    delivery_id UUID        NOT NULL UNIQUE REFERENCES notifications.deliveries(id),
-    subject     VARCHAR(256),
-    body        TEXT,
-    is_read     BOOLEAN     NOT NULL DEFAULT FALSE,
-    read_at     TIMESTAMPTZ,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX idx_inbox_user_unread ON notifications.inbox_messages(user_id, is_read)
-    WHERE is_read = FALSE;
--- days_of_week: 0=Sun … 6=Sat
+-- notifications.dnd_settings
 -- ---------------------------------------------------------------------------
 CREATE TABLE notifications.dnd_settings (
     id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -386,10 +291,12 @@ CREATE TABLE notifications.dnd_settings (
 );
 
 
+-- =============================================================================
+-- SCHEMA: payments
+-- =============================================================================
+
 -- ---------------------------------------------------------------------------
--- payment_transactions
--- Sensitive card/payer references are application-encrypted (BYTEA).
--- idempotency_key is UNIQUE to prevent duplicate submission.
+-- payments.transactions
 -- ---------------------------------------------------------------------------
 CREATE TABLE payments.transactions (
     id                      UUID           PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -402,36 +309,39 @@ CREATE TABLE payments.transactions (
     status                  VARCHAR(20)    NOT NULL DEFAULT 'pending'
                                            CHECK (status IN ('pending','completed','failed','refunded','partially_refunded','voided')),
     collected_by            UUID           REFERENCES auth.users(id),
-    -- encrypted sensitive fields
     created_at              TIMESTAMPTZ    NOT NULL DEFAULT now(),
-CREATE INDEX idx_txn_trip_id    ON payments.transactions(trip_id);
-CREATE INDEX idx_txn_status     ON payments.transactions(status);
-CREATE INDEX idx_txn_created_at ON payments.transactions(created_at DESC);
+    updated_at              TIMESTAMPTZ    NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_txn_trip_id      ON payments.transactions(trip_id);
+CREATE INDEX idx_txn_status       ON payments.transactions(status);
+CREATE INDEX idx_txn_created_at   ON payments.transactions(created_at DESC);
 CREATE INDEX idx_txn_collected_by ON payments.transactions(collected_by);
 
 -- ---------------------------------------------------------------------------
--- payment_callbacks  — inbound webhook / provider callbacks
--- nonce is UNIQUE to prevent replay attacks.
+-- payments.callbacks
 -- ---------------------------------------------------------------------------
 CREATE TABLE payments.callbacks (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    transaction_id  UUID        REFERENCES payments.transactions(id) ON DELETE SET NULL,
-    nonce           VARCHAR(256) NOT NULL UNIQUE,   -- replay-prevention
-    signature       TEXT        NOT NULL,           -- HMAC or provider signature
-    payload_hash    TEXT        NOT NULL,           -- SHA-256 of raw payload
-    source          VARCHAR(64) NOT NULL,           -- provider name
-    received_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    processed_at    TIMESTAMPTZ,
-    status          VARCHAR(16) NOT NULL DEFAULT 'received'
-                                CHECK (status IN ('received','processed','invalid','replayed'))
+    id                 UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    transaction_id     UUID        REFERENCES payments.transactions(id) ON DELETE SET NULL,
+    nonce              VARCHAR(256) NOT NULL UNIQUE,   -- replay-prevention
+    signature          TEXT        NOT NULL,           -- HMAC or provider signature
+    payload_hash       TEXT        NOT NULL,           -- SHA-256 of raw payload
+    source             VARCHAR(64) NOT NULL,           -- provider name
+    received_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    processed_at       TIMESTAMPTZ,
+    callback_timestamp TIMESTAMPTZ,
+    status             VARCHAR(16) NOT NULL DEFAULT 'received'
+                                   CHECK (status IN ('received','processed','invalid','replayed'))
 );
 
 CREATE INDEX idx_callbacks_transaction ON payments.callbacks(transaction_id);
 CREATE INDEX idx_callbacks_received_at ON payments.callbacks(received_at DESC);
 CREATE INDEX idx_callbacks_status      ON payments.callbacks(status);
+CREATE INDEX idx_callbacks_ts          ON payments.callbacks(callback_timestamp);
 
 -- ---------------------------------------------------------------------------
--- refunds
+-- payments.refunds
 -- ---------------------------------------------------------------------------
 CREATE TABLE payments.refunds (
     id               UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -452,7 +362,7 @@ CREATE INDEX idx_refunds_transaction ON payments.refunds(transaction_id);
 CREATE INDEX idx_refunds_status      ON payments.refunds(status);
 
 -- ---------------------------------------------------------------------------
--- reconciliation_runs  — one run per calendar date
+-- payments.reconciliation_runs
 -- ---------------------------------------------------------------------------
 CREATE TABLE payments.reconciliation_runs (
     id                  UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -475,7 +385,7 @@ CREATE INDEX idx_recon_run_date ON payments.reconciliation_runs(run_date DESC);
 CREATE INDEX idx_recon_status   ON payments.reconciliation_runs(status);
 
 -- ---------------------------------------------------------------------------
--- reconciliation_items  — per-transaction detail for a run
+-- payments.reconciliation_items
 -- ---------------------------------------------------------------------------
 CREATE TABLE payments.reconciliation_items (
     id                UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -495,32 +405,30 @@ CREATE INDEX idx_recon_items_run    ON payments.reconciliation_items(run_id);
 CREATE INDEX idx_recon_items_status ON payments.reconciliation_items(match_status);
 
 -- ---------------------------------------------------------------------------
--- statement_imports  — bank/provider file imports
--- raw_content encrypted at application layer before storage.
--- file_hash UNIQUE prevents duplicate file ingestion.
+-- payments.statement_imports
 -- ---------------------------------------------------------------------------
 CREATE TABLE payments.statement_imports (
-    id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    filename          VARCHAR(256) NOT NULL,
-    file_hash         VARCHAR(64)  NOT NULL UNIQUE,  -- SHA-256 of original file
-    source            VARCHAR(128) NOT NULL,          -- bank / provider name
-    import_date       DATE         NOT NULL,
-    status            VARCHAR(16)  NOT NULL DEFAULT 'pending'
-                                   CHECK (status IN ('pending','processing','completed','failed')),
-    total_records     INT          NOT NULL DEFAULT 0,
-    processed_records INT          NOT NULL DEFAULT 0,
-    error_count       INT          NOT NULL DEFAULT 0,
-    imported_by       UUID         NOT NULL REFERENCES auth.users(id),
-    raw_content_encrypted BYTEA,                      -- pgp_sym_encrypt of file bytes
-    created_at        TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    updated_at        TIMESTAMPTZ  NOT NULL DEFAULT now()
+    id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    filename              VARCHAR(256) NOT NULL,
+    file_hash             VARCHAR(64)  NOT NULL UNIQUE,  -- SHA-256 of original file
+    source                VARCHAR(128) NOT NULL,          -- bank / provider name
+    import_date           DATE         NOT NULL,
+    status                VARCHAR(16)  NOT NULL DEFAULT 'pending'
+                                       CHECK (status IN ('pending','processing','completed','failed')),
+    total_records         INT          NOT NULL DEFAULT 0,
+    processed_records     INT          NOT NULL DEFAULT 0,
+    error_count           INT          NOT NULL DEFAULT 0,
+    imported_by           UUID         NOT NULL REFERENCES auth.users(id),
+    raw_content_encrypted BYTEA,                          -- pgp_sym_encrypt of file bytes
+    created_at            TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at            TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_stmt_import_date   ON payments.statement_imports(import_date DESC);
 CREATE INDEX idx_stmt_import_status ON payments.statement_imports(status);
 
 -- ---------------------------------------------------------------------------
--- statement_import_lines  — individual rows parsed from an import file
+-- payments.statement_import_lines
 -- ---------------------------------------------------------------------------
 CREATE TABLE payments.statement_import_lines (
     id                     UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -537,10 +445,67 @@ CREATE TABLE payments.statement_import_lines (
     UNIQUE (import_id, line_number)
 );
 
-CREATE INDEX idx_stmt_lines_import   ON payments.statement_import_lines(import_id);
-CREATE INDEX idx_stmt_lines_match    ON payments.statement_import_lines(match_status);
+CREATE INDEX idx_stmt_lines_import      ON payments.statement_import_lines(import_id);
+CREATE INDEX idx_stmt_lines_match       ON payments.statement_import_lines(match_status);
 CREATE INDEX idx_stmt_lines_matched_txn ON payments.statement_import_lines(matched_transaction_id)
     WHERE matched_transaction_id IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- payments.compensation_jobs
+-- (base definition; migration 007 also has CREATE TABLE IF NOT EXISTS)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS payments.compensation_jobs (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_type        TEXT        NOT NULL
+                                CHECK (job_type IN ('stuck_transactions', 'pending_refunds', 'callback_retry')),
+    status          TEXT        NOT NULL DEFAULT 'running'
+                                CHECK (status IN ('running', 'completed', 'failed')),
+    affected_count  INT         NOT NULL DEFAULT 0,
+    error_message   TEXT,
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_comp_jobs_type   ON payments.compensation_jobs (job_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_comp_jobs_status ON payments.compensation_jobs (status);
+
+-- ---------------------------------------------------------------------------
+-- payments.gateway_configs
+-- (base definition; migration 007 also has CREATE TABLE IF NOT EXISTS)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS payments.gateway_configs (
+    id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    name           VARCHAR(64)  NOT NULL UNIQUE,
+    display_name   VARCHAR(128) NOT NULL,
+    hmac_secret    TEXT         NOT NULL,
+    hmac_algorithm VARCHAR(16)  NOT NULL DEFAULT 'sha256'
+                                CHECK (hmac_algorithm IN ('sha256', 'sha512')),
+    sig_header     VARCHAR(64)  NOT NULL DEFAULT 'X-Signature',
+    nonce_header   VARCHAR(64)  NOT NULL DEFAULT 'X-Nonce',
+    ts_header      VARCHAR(64)  NOT NULL DEFAULT 'X-Timestamp',
+    ts_in_sig      BOOLEAN      NOT NULL DEFAULT TRUE,
+    is_active      BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+-- ---------------------------------------------------------------------------
+-- payments.reconciliation_entries (view)
+-- Depends on: reconciliation_items, reconciliation_runs, transactions
+-- Must appear AFTER those tables.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW payments.reconciliation_entries AS
+SELECT
+    ri.id,
+    ri.transaction_id,
+    ROUND(ri.expected_amount * 100)::BIGINT AS expected_amount_cents,
+    ROUND(ri.actual_amount   * 100)::BIGINT AS settled_amount_cents,
+    rr.run_date::TIMESTAMPTZ               AS reconciled_at,
+    tx.route_id
+FROM payments.reconciliation_items ri
+JOIN payments.reconciliation_runs rr ON rr.id = ri.run_id
+LEFT JOIN payments.transactions  tx  ON tx.id = ri.transaction_id;
 
 
 -- =============================================================================
@@ -548,7 +513,7 @@ CREATE INDEX idx_stmt_lines_matched_txn ON payments.statement_import_lines(match
 -- =============================================================================
 
 -- ---------------------------------------------------------------------------
--- metric_definitions
+-- reporting.metric_definitions
 -- ---------------------------------------------------------------------------
 CREATE TABLE reporting.metric_definitions (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -566,8 +531,7 @@ CREATE TABLE reporting.metric_definitions (
 );
 
 -- ---------------------------------------------------------------------------
--- kpi_results  — pre-aggregated results per metric per period
--- dimensions JSONB allows arbitrary slice (route, driver, payment_method …)
+-- reporting.kpi_results
 -- ---------------------------------------------------------------------------
 CREATE TABLE reporting.kpi_results (
     id           UUID           PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -589,7 +553,7 @@ CREATE INDEX idx_kpi_dimensions    ON reporting.kpi_results USING GIN (dimension
 CREATE INDEX idx_kpi_computed_at   ON reporting.kpi_results(computed_at DESC);
 
 -- ---------------------------------------------------------------------------
--- report_snapshots  — on-demand generated report cache
+-- reporting.report_snapshots
 -- ---------------------------------------------------------------------------
 CREATE TABLE reporting.report_snapshots (
     id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -605,37 +569,49 @@ CREATE TABLE reporting.report_snapshots (
 CREATE INDEX idx_snapshots_type       ON reporting.report_snapshots(report_type);
 CREATE INDEX idx_snapshots_expires_at ON reporting.report_snapshots(expires_at);
 
+-- ---------------------------------------------------------------------------
+-- reporting.report_runs  (used by the reporting handlers)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS reporting.report_runs (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    report_type  VARCHAR(64) NOT NULL,
+    generated_by UUID        NOT NULL REFERENCES auth.users(id),
+    parameters   JSONB       NOT NULL DEFAULT '{}',
+    result_data  JSONB       NOT NULL DEFAULT '{}',
+    value        NUMERIC(24,6),
+    generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at   TIMESTAMPTZ NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 
 -- =============================================================================
 -- SCHEMA: audit
--- Immutable append-only log.  No UPDATE, no DELETE ever permitted.
+-- Immutable append-only log. No UPDATE, no DELETE ever permitted.
 -- Partitioned by year to support 7-year retention + efficient pruning.
--- actor_id is NOT a FK — must survive user deletion for full traceability.
 -- =============================================================================
 
 CREATE TABLE audit.audit_logs (
     id               UUID        NOT NULL DEFAULT gen_random_uuid(),
-    -- actor columns: no FK so log survives user purge
-    actor_id         UUID,                           -- NULL = system/automated
-    actor_username   VARCHAR(64),                    -- snapshot at time of action
+    actor_id         UUID,
+    actor_username   VARCHAR(64),
     actor_role       VARCHAR(64),
-    action           VARCHAR(64) NOT NULL,           -- CREATE|UPDATE|DELETE|LOGIN|LOGOUT|EXPORT|CONFIG_CHANGE|…
-    domain           VARCHAR(64) NOT NULL,           -- ops|payments|notifications|reporting|auth
-    entity_type      VARCHAR(64) NOT NULL,           -- table/resource name
-    entity_id        TEXT        NOT NULL,           -- string to handle any PK type
-    before_state     JSONB,                          -- NULL for CREATE
-    after_state      JSONB,                          -- NULL for DELETE
-    diff             JSONB,                          -- computed diff (optional, set by app layer)
+    action           VARCHAR(64) NOT NULL,
+    domain           VARCHAR(64) NOT NULL,
+    entity_type      VARCHAR(64) NOT NULL,
+    entity_id        TEXT        NOT NULL,
+    before_state     JSONB,
+    after_state      JSONB,
+    diff             JSONB,
     ip_address       INET,
     user_agent       TEXT,
     session_id       UUID,
     metadata         JSONB       NOT NULL DEFAULT '{}',
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     retention_until  DATE        NOT NULL,
-    PRIMARY KEY (id, created_at)   -- composite PK required for partitioning
+    PRIMARY KEY (id, created_at)
 ) PARTITION BY RANGE (created_at);
 
--- Yearly partitions — extend each January via cron/pg_partman
 CREATE TABLE audit.audit_logs_2024 PARTITION OF audit.audit_logs
     FOR VALUES FROM ('2024-01-01 00:00:00+00') TO ('2025-01-01 00:00:00+00');
 
@@ -657,43 +633,52 @@ CREATE TABLE audit.audit_logs_2029 PARTITION OF audit.audit_logs
 CREATE TABLE audit.audit_logs_2030 PARTITION OF audit.audit_logs
     FOR VALUES FROM ('2030-01-01 00:00:00+00') TO ('2031-01-01 00:00:00+00');
 
--- Indexes on the parent table propagate to all partitions automatically
-CREATE INDEX idx_audit_created_at   ON audit.audit_logs(created_at DESC);
-CREATE INDEX idx_audit_actor_id     ON audit.audit_logs(actor_id) WHERE actor_id IS NOT NULL;
-CREATE INDEX idx_audit_entity       ON audit.audit_logs(domain, entity_type, entity_id);
-CREATE INDEX idx_audit_action       ON audit.audit_logs(action);
-CREATE INDEX idx_audit_session      ON audit.audit_logs(session_id) WHERE session_id IS NOT NULL;
+CREATE INDEX idx_audit_created_at ON audit.audit_logs(created_at DESC);
+CREATE INDEX idx_audit_actor_id   ON audit.audit_logs(actor_id) WHERE actor_id IS NOT NULL;
+CREATE INDEX idx_audit_entity     ON audit.audit_logs(domain, entity_type, entity_id);
+CREATE INDEX idx_audit_action     ON audit.audit_logs(action);
+CREATE INDEX idx_audit_session    ON audit.audit_logs(session_id) WHERE session_id IS NOT NULL;
 
--- Row-level security: audit logs are INSERT-only at the DB level
--- (enforced by granting only INSERT + SELECT, never UPDATE/DELETE to app role)
+
+-- =============================================================================
+-- SCHEMA: scheduler
+-- (also created by migration 013 with CREATE TABLE — safe due to IF NOT EXISTS)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS scheduler.job_runs (
+    id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_name     TEXT         NOT NULL,
+    status       TEXT         NOT NULL DEFAULT 'running'
+                              CHECK (status IN ('running', 'success', 'failed', 'skipped')),
+    started_at   TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    finished_at  TIMESTAMPTZ,
+    duration_ms  INTEGER,
+    outcome      JSONB,
+    error_msg    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_runs_name_time
+    ON scheduler.job_runs (job_name, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_job_runs_running
+    ON scheduler.job_runs (started_at)
+    WHERE status = 'running';
 
 
 -- =============================================================================
 -- SECURITY: Application DB Role (least-privilege)
 -- =============================================================================
 
--- Create a dedicated application role — adjust name/password before deploying
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'transitops_app') THEN
-        CREATE ROLE transitops_app LOGIN PASSWORD 'CHANGE_ME_BEFORE_DEPLOY';
-    END IF;
-END
-$$;
-
--- Grant schema usage
-GRANT USAGE ON SCHEMA auth, ops, notifications, payments, reporting, audit
+GRANT USAGE ON SCHEMA auth, ops, notifications, payments, reporting, audit, scheduler
     TO transitops_app;
 
--- Standard CRUD on all tables except audit_logs (INSERT + SELECT only)
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA auth          TO transitops_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ops           TO transitops_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA notifications TO transitops_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA payments      TO transitops_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA reporting     TO transitops_app;
-
--- Audit logs: INSERT and SELECT only — never UPDATE or DELETE
-GRANT SELECT, INSERT ON audit.audit_logs TO transitops_app;
+GRANT SELECT, INSERT ON audit.audit_logs                                   TO transitops_app;
+GRANT SELECT, INSERT, UPDATE ON scheduler.job_runs                         TO transitops_app;
 
 
 -- =============================================================================
@@ -708,7 +693,6 @@ BEGIN
 END;
 $$;
 
--- Attach trigger to every table with an updated_at column
 DO $$
 DECLARE
     tbl RECORD;
@@ -717,7 +701,7 @@ BEGIN
         SELECT table_schema, table_name
         FROM information_schema.columns
         WHERE column_name = 'updated_at'
-          AND table_schema IN ('auth','ops','notifications','payments','reporting')
+          AND table_schema IN ('auth','ops','notifications','payments','reporting','scheduler')
     LOOP
         EXECUTE format(
             'CREATE TRIGGER trg_set_updated_at

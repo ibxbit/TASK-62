@@ -188,7 +188,7 @@ async fn tag_duplicate_lines(
 
         // Get the canonical line's ID
         let canonical_id: Option<Uuid> = sqlx::query_scalar!(
-            "SELECT id FROM payments.statement_import_lines WHERE import_id = $1 AND line_number = $2",
+            "SELECT id as \"id!\" FROM payments.statement_import_lines WHERE import_id = $1 AND line_number = $2",
             import_id,
             canonical_line_no,
         )
@@ -203,7 +203,7 @@ async fn tag_duplicate_lines(
             let line_no = (idx + 1) as i32;
             if line_no == canonical_line_no { continue; }
 
-            sqlx::query!(
+            let _result: sqlx::postgres::PgQueryResult = sqlx::query!(
                 r#"UPDATE payments.statement_import_lines
                    SET duplicate_of_line_id = $3
                    WHERE import_id = $1 AND line_number = $2"#,
@@ -252,7 +252,12 @@ pub async fn start_run(
     .await?
     .ok_or_else(|| AppError::NotFound("Statement import not found".to_string()))?;
 
-    if import.status == "failed" {
+    // Help compiler infer types for the record
+    let status: String = import.status;
+    let _hash: String  = import.file_hash;
+    let _enc: Option<Vec<u8>> = import.raw_content_encrypted;
+
+    if status == "failed" {
         return Err(AppError::BadRequest(
             "Cannot reconcile: the statement import failed format validation".to_string(),
         ));
@@ -372,7 +377,7 @@ pub async fn get_run(
     session.require(Permission::PaymentsReconciliationRead)?;
     let id = *path;
 
-    let row = sqlx::query_as!(
+    let row: Option<ReconciliationRunRow> = sqlx::query_as!(
          ReconciliationRunRow,
          r#"
          SELECT id, run_date, status, statement_import_id,
@@ -444,7 +449,9 @@ pub async fn run_summary(
     // Verify run exists
     let run = sqlx::query!(
         r#"
-        SELECT total_expected::double precision, total_collected::double precision, discrepancy_count
+        SELECT total_expected::double precision as "total_expected!", 
+               total_collected::double precision as "total_collected!", 
+               discrepancy_count
         FROM payments.reconciliation_runs WHERE id = $1
         "#,
         run_id,
@@ -457,7 +464,7 @@ pub async fn run_summary(
     #[derive(sqlx::FromRow)]
     struct CountRow { discrepancy_type: Option<String>, cnt: Option<i64> }
 
-    let counts = sqlx::query_as!(
+    let counts: Vec<CountRow> = sqlx::query_as!(
         CountRow,
         r#"
         SELECT discrepancy_type, COUNT(*) AS cnt
@@ -470,7 +477,7 @@ pub async fn run_summary(
     .fetch_all(&state.db)
     .await?;
 
-    let mut by_type = serde_json::Map::new();
+    let mut by_type: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
     for c in &counts {
         if let Some(ref t) = c.discrepancy_type {
             by_type.insert(t.clone(), serde_json::json!(c.cnt.unwrap_or(0)));
@@ -479,9 +486,9 @@ pub async fn run_summary(
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "run_id":            run_id,
-        "total_expected":    run.total_expected.clone(),
-        "total_collected":   run.total_collected.clone(),
-        "total_discrepancy": run.total_collected.as_ref().and_then(|v| v.to_f64()).unwrap_or(0.0) - run.total_expected.as_ref().and_then(|v| v.to_f64()).unwrap_or(0.0),
+        "total_expected":    run.total_expected,
+        "total_collected":   run.total_collected,
+        "total_discrepancy": run.total_collected - run.total_expected,
         "discrepancy_count": run.discrepancy_count,
         "amount_tolerance":  AMOUNT_TOLERANCE,
         "by_type":           by_type,
@@ -509,7 +516,7 @@ pub async fn list_statements(
         created_at:      chrono::DateTime<Utc>,
     }
 
-    let rows = sqlx::query_as!(
+    let rows: Vec<StmtRow> = sqlx::query_as!(
         StmtRow,
         r#"
         SELECT id, filename, file_hash, source, import_date, status,

@@ -224,7 +224,7 @@ pub async fn receive_callback(
     };
 
     // ---- Insert callback record ----
-    let callback_id = sqlx::query_scalar!(
+    let callback_id: Uuid = sqlx::query_scalar!(
         r#"
         INSERT INTO payments.callbacks
             (transaction_id, nonce, signature, payload_hash,

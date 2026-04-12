@@ -61,7 +61,7 @@ pub async fn list_alerts(
     let limit  = query.limit.unwrap_or(50).clamp(1, 200);
     let offset = query.offset.unwrap_or(0).max(0);
 
-    let rows = sqlx::query_as!(
+    let rows: Vec<AlertRow> = sqlx::query_as!(
         AlertRow,
         r#"
         SELECT id, alert_type, severity, status, source_domain, source_entity_id,
@@ -152,7 +152,7 @@ pub async fn get_alert(
     session.require(Permission::AlertsRead)?;
     let id = *path;
 
-    let row = sqlx::query_as!(
+    let row: Option<AlertRow> = sqlx::query_as!(
         AlertRow,
         r#"
         SELECT id, alert_type, severity, status, source_domain, source_entity_id,

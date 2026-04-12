@@ -68,7 +68,7 @@ pub async fn compensate_stuck_transactions(pool: &PgPool) -> Result<(), sqlx::Er
     // The new status is derived from the callback payload's `status` field:
     //   - payload->>'status' ILIKE 'FAIL%'  → 'failed'
     //   - otherwise                          → 'completed'
-    let result = sqlx::query!(
+    let result: sqlx::postgres::PgQueryResult = sqlx::query!(
         r#"
         WITH stuck AS (
             SELECT DISTINCT ON (tx.id)
@@ -129,7 +129,7 @@ pub async fn compensate_pending_refunds(pool: &PgPool) -> Result<(), sqlx::Error
     .fetch_one(pool)
     .await?;
 
-    let result = sqlx::query!(
+    let result: sqlx::postgres::PgQueryResult = sqlx::query!(
         r#"
         UPDATE payments.refunds
         SET    status     = 'approved',
@@ -179,7 +179,7 @@ pub async fn retry_unprocessed_callbacks(pool: &PgPool) -> Result<(), sqlx::Erro
 
     // Mark old unprocessed callbacks as 'invalid' so they stop blocking the transaction,
     // and emit a warning for manual review.
-    let result = sqlx::query!(
+    let result: sqlx::postgres::PgQueryResult = sqlx::query!(
         r#"
         UPDATE payments.callbacks
         SET    status = 'invalid'
