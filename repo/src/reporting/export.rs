@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use printpdf::*;
 use std::io::BufWriter;
 
-use super::models::{MetricResult, TimeSeriesPoint};
+use super::models::MetricResult;
 
 // ============================================================
 // CSV export
@@ -237,6 +237,7 @@ pub fn to_pdf(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::models::TimeSeriesPoint;
     use chrono::TimeZone;
 
     fn make_result(key: &str, points: &[(f64, i64)]) -> MetricResult {

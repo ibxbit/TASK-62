@@ -18,7 +18,7 @@ use actix_web::HttpMessage;
 ///   server  →  stores SHA-256(raw_token) as token_hash — raw token never on disk.
 use std::{future::Future, pin::Pin};
 
-use actix_web::{dev::Payload, web, FromRequest, HttpRequest, ResponseError};
+use actix_web::{dev::Payload, web, FromRequest, HttpRequest};
 use chrono::{DateTime, Duration, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;

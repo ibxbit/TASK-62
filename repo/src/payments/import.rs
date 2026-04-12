@@ -11,9 +11,8 @@
 ///   4. `POST /payments/imports/{id}/process` triggers `process_import_file`.
 ///   5. Each line is parsed, stored in `statement_import_lines`, and matched
 ///      against `payments.transactions` by `idempotency_key` or amount+date.
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{NaiveDate, Utc};
 use bigdecimal::BigDecimal;
-use bigdecimal::ToPrimitive;
 use std::str::FromStr;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};

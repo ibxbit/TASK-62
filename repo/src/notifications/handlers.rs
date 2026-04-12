@@ -6,7 +6,6 @@ use crate::{
     auth::middleware::AuthSession,
     error::AppError,
     notifications::{
-        bus,
         models::{
             AnnounceRequest, ChannelPreferenceResponse, CreateRuleRequest, DeliveryQuery,
             DeliveryResponse, DeliveryRow, EventDefRow, PreferencesResponse, PreferencesRow,

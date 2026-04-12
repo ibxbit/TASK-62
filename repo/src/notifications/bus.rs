@@ -19,7 +19,6 @@
 ///   last 15 minutes. If so, the delivery is skipped. The UNIQUE constraint
 ///   on (event_id, user_id) provides a safety net against concurrent inserts.
 use chrono::{NaiveTime, Utc};
-use serde_json::Value;
 use sqlx::PgPool;
 use std::time::Duration;
 use uuid::Uuid;

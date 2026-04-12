@@ -23,8 +23,7 @@ where
 // DB row types
 // ============================================================
 
-use bigdecimal::{BigDecimal, ToPrimitive, FromPrimitive};
-use std::str::FromStr;
+use bigdecimal::{BigDecimal, ToPrimitive};
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct GatewayConfigRow {
     pub id:             Uuid,
@@ -212,7 +211,7 @@ pub struct TransactionResponse {
 }
 
 impl TransactionResponse {
-    pub fn from_row(r: TransactionRow, crypto: &crate::crypto::FieldEncryptor) -> Self {
+    pub fn from_row(r: TransactionRow, _crypto: &crate::crypto::FieldEncryptor) -> Self {
         // TransactionRow does not have card_last4_encrypted, only payer_ref_encrypted
         let card_last4 = None;
         let has_payer_ref = r.payer_ref_encrypted.is_some();

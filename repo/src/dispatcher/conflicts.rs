@@ -144,6 +144,7 @@ pub async fn detect_approaching_unassigned(
     pool: &PgPool,
 ) -> Result<Vec<(Uuid, &'static str)>, sqlx::Error> {
     #[derive(sqlx::FromRow)]
+    #[allow(dead_code)]
     struct ApproachingRow {
         id:                   Uuid,
         trip_code:            String,

@@ -1,4 +1,4 @@
-use bigdecimal::{ToPrimitive, FromPrimitive};
+use bigdecimal::FromPrimitive;
 use crate::payments::gateway::PaymentGateway;
 use actix_web::{web, HttpRequest, HttpResponse};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};

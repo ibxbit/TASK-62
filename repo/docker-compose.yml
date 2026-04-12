@@ -13,7 +13,7 @@ services:
       - .:/workspace
     working_dir: /workspace
     environment:
-      DATABASE_URL: postgres://transitops_app:transitops_secret@db:5432/transitops
+      DATABASE_URL: postgresql://transitops_app:transitops_secret@db:5432/transitops
       ENCRYPTION_KEY: 6befdbda636469a7c848628e9b461069143c2ba97afae89b88947814ce123ec3
       API_URL: "http://api:8081"
     entrypoint: ["/bin/bash", "-c", "apt-get update && apt-get install -y curl && pip install --default-timeout=120 -r requirements.txt && chmod +x run_tests.sh && ./run_tests.sh"]

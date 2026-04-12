@@ -55,10 +55,22 @@ pub async fn job_loop(pool: PgPool, job: Arc<dyn Job>, shutdown: ShutdownFlag) {
 async fn execute(pool: &PgPool, job: &Arc<dyn Job>) {
     let lock_id = advisory_lock_id(job.name());
 
+    // Acquire a dedicated connection so the advisory lock is acquired and released
+    // on the same PostgreSQL session.  Session-level advisory locks are connection-
+    // scoped; using the pool for both acquire and release risks them landing on
+    // different connections, which causes "you don't own a lock" warnings.
+    let mut lock_conn = match pool.acquire().await {
+        Ok(c)  => c,
+        Err(e) => {
+            tracing::warn!(job = job.name(), error = %e, "Failed to acquire lock connection, skipping tick");
+            return;
+        }
+    };
+
     // Try to acquire — non-blocking
     let acquired: bool = match sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
         .bind(lock_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *lock_conn)
         .await
     {
         Ok(b)  => b,
@@ -79,12 +91,13 @@ async fn execute(pool: &PgPool, job: &Arc<dyn Job>) {
     let result = job.run(pool).await;
     let ms     = t0.elapsed().as_millis() as i32;
 
-    // Release advisory lock before writing finish record so other instances
-    // can proceed as quickly as possible.
+    // Release advisory lock on the same connection that acquired it, then return
+    // the connection to the pool before writing the finish record.
     let _ = sqlx::query("SELECT pg_advisory_unlock($1)")
         .bind(lock_id)
-        .execute(pool)
+        .execute(&mut *lock_conn)
         .await;
+    drop(lock_conn);
 
     match run_id {
         Some(id) => record_finish(pool, id, ms, result).await,

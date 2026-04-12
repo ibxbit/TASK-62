@@ -165,7 +165,7 @@ pub async fn update_route(
     session.require(Permission::OpsRoutesWrite)?;
 
     let route_id = path.into_inner();
-    let row = require_route_not_active_for_edit(&state, route_id).await?;
+    let _row = require_route_not_active_for_edit(&state, route_id).await?;
 
     let row = sqlx::query_as::<_, RouteRow>(
         r#"

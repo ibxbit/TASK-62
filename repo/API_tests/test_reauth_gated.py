@@ -118,7 +118,7 @@ class TestScheduleVersionReauth:
     def test_schedule_without_reauth_returns_403(self, api, test_user_ids):
         import datetime
         token = _fresh_token_no_reauth(api, "admin")
-        future = (datetime.datetime.utcnow() + datetime.timedelta(hours=1)).isoformat() + "Z"
+        future = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)).isoformat().replace("+00:00", "Z")
         r = api("POST", self._path, token=token,
                 json={"effective_from": future})
         assert_reauth_required(r)
@@ -126,7 +126,7 @@ class TestScheduleVersionReauth:
     def test_schedule_after_reauth_passes_reauth_gate(self, api, test_user_ids):
         import datetime
         token = _fresh_token_with_reauth(api, "admin")
-        future = (datetime.datetime.utcnow() + datetime.timedelta(hours=1)).isoformat() + "Z"
+        future = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)).isoformat().replace("+00:00", "Z")
         r = api("POST", self._path, token=token,
                 json={"effective_from": future})
         assert_reauth_passed(r)

@@ -9,10 +9,10 @@ Setup strategy
 3. Yield tokens to test modules.
 4. Tear down: delete all rows created during the session.
 
-Environment variables (with defaults for local docker-compose)
+Environment variables (with defaults for docker-compose)
 --------------------------------------------------------------
-    API_URL      http://localhost:8081
-  DATABASE_URL postgresql://transitops_app:transitops_secret@localhost:5432/transitops
+    API_URL      http://api:8081
+  DATABASE_URL postgresql://transitops_app:transitops_secret@db:5432/transitops
   ENCRYPTION_KEY 0123456789abcdef...  (64 hex chars)
 """
 
@@ -29,10 +29,10 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-API_URL = os.getenv("API_URL", "http://localhost:8081")
+API_URL = os.getenv("API_URL", "http://api:8081")
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://transitops_app:transitops_secret@localhost:5432/transitops",
+    "postgresql://transitops_app:transitops_secret@db:5432/transitops",
 )
 ENCRYPTION_KEY_HEX = os.getenv(
     "ENCRYPTION_KEY",
@@ -97,7 +97,30 @@ TEST_USERS = {
 # ── Database helpers ──────────────────────────────────────────────────────────
 
 def _pg_connect():
-    return psycopg2.connect(DATABASE_URL)
+    """Connect to PostgreSQL, retrying for up to 30 seconds.
+
+    Tries both the configured DATABASE_URL and an automatic hostname
+    alternative so the test suite works whether it runs on the Docker
+    host (localhost:5432) or inside the Docker network (db:5432).
+    """
+    urls = [DATABASE_URL]
+    # Inside a Docker container, 'localhost' won't reach the db service;
+    # add 'db' as a fallback so tests work in both environments.
+    if "@localhost:" in DATABASE_URL:
+        urls.append(DATABASE_URL.replace("@localhost:", "@db:"))
+    elif "@db:" in DATABASE_URL:
+        urls.append(DATABASE_URL.replace("@db:", "@localhost:"))
+
+    last_error = None
+    for attempt in range(10):
+        for url in urls:
+            try:
+                return psycopg2.connect(url)
+            except psycopg2.OperationalError as e:
+                last_error = e
+        if attempt < 9:
+            time.sleep(3)
+    raise last_error
 
 
 def _wait_for_api(max_wait: int = 60):
