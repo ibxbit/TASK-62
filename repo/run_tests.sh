@@ -91,19 +91,43 @@ if $CHECK_DEPS; then
     fi
 
     if $RUN_API; then
-        info "Waiting for API at $API_URL ..."
         MAX_WAIT=60
-        DEADLINE=$((SECONDS + MAX_WAIT))
-        until curl -s -o /dev/null -w "%{http_code}" "$API_URL/auth/session" \
-              2>/dev/null | grep -qE '^(200|401)$'; do
-            if [[ $SECONDS -ge $DEADLINE ]]; then
-                error "API at $API_URL did not become ready within ${MAX_WAIT}s."
-                error "Start the stack with: docker compose up -d"
-                exit 2
+        declare -a CANDIDATE_API_URLS
+        CANDIDATE_API_URLS+=("$API_URL")
+        if [[ "$API_URL" != "http://api:8081" ]]; then
+            CANDIDATE_API_URLS+=("http://api:8081")
+        fi
+        if [[ "$API_URL" != "http://localhost:8081" ]]; then
+            CANDIDATE_API_URLS+=("http://localhost:8081")
+        fi
+
+        API_REACHABLE=false
+        for candidate in "${CANDIDATE_API_URLS[@]}"; do
+            info "Waiting for API at $candidate ..."
+            DEADLINE=$((SECONDS + MAX_WAIT))
+            until curl -s -o /dev/null -w "%{http_code}" "$candidate/auth/session" \
+                2>/dev/null | grep -qE '^(200|401)$'; do
+                if [[ $SECONDS -ge $DEADLINE ]]; then
+                    break
+                fi
+                sleep 2
+            done
+
+            if curl -s -o /dev/null -w "%{http_code}" "$candidate/auth/session" \
+                2>/dev/null | grep -qE '^(200|401)$'; then
+                export API_URL="$candidate"
+                API_REACHABLE=true
+                break
             fi
-            sleep 2
         done
-        success "API is reachable."
+
+        if [[ "$API_REACHABLE" != "true" ]]; then
+            error "API did not become ready at any known endpoint (${CANDIDATE_API_URLS[*]})."
+            error "Start the stack with: docker compose up -d"
+            exit 2
+        fi
+
+        success "API is reachable at $API_URL."
     fi
 fi
 
