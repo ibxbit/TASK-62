@@ -62,27 +62,33 @@ pub async fn create_transaction(
     let currency       = body.currency.clone().unwrap_or_else(|| "CNY".to_string());
     let metadata       = body.metadata.clone().unwrap_or(serde_json::Value::Object(Default::default()));
     let payer_ref_enc  = state.crypto.encrypt_opt(body.payer_ref.as_deref())?;
+    let amount_bd      = bigdecimal::BigDecimal::from_f64(body.amount)
+        .unwrap_or_else(|| bigdecimal::BigDecimal::from(0));
 
-    let row = sqlx::query_as::<_, TransactionRow>(
+    let row = sqlx::query_as!(
+        TransactionRow,
         r#"INSERT INTO payments.transactions
                (idempotency_key, trip_id, route_id, amount, currency,
                 payment_method, collected_by, metadata,
                 payer_ref_encrypted)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING id, idempotency_key, trip_id, route_id,
-                     amount, currency, payment_method, status,
-                     collected_by, metadata, payer_ref_encrypted,
-                     created_at, updated_at"#
+                     amount as "amount: bigdecimal::BigDecimal",
+                     currency, payment_method, status,
+                     collected_by,
+                     metadata as "metadata: serde_json::Value",
+                     payer_ref_encrypted,
+                     created_at, updated_at"#,
+        &body.idempotency_key,
+        body.trip_id as Option<Uuid>,
+        body.route_id as Option<Uuid>,
+        amount_bd,
+        &currency,
+        &body.payment_method,
+        session.user_id,
+        metadata as serde_json::Value,
+        payer_ref_enc as Option<Vec<u8>>,
     )
-    .bind(&body.idempotency_key)
-    .bind(body.trip_id)
-    .bind(body.route_id)
-    .bind(body.amount)
-    .bind(&currency)
-    .bind(&body.payment_method)
-    .bind(session.user_id)
-    .bind(&metadata)
-    .bind(&payer_ref_enc)
     .fetch_one(&state.db)
     .await?;
 

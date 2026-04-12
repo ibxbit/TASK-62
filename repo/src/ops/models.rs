@@ -45,7 +45,7 @@ pub struct OkResponse {
 
 #[derive(Deserialize)]
 pub struct CreateRouteRequest {
-    #[serde(alias = "route_code")]
+    #[serde(rename = "route_code", alias = "code")]
     pub code: String,
     pub name: String,
     pub description: Option<String>,

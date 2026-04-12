@@ -231,11 +231,10 @@ class TestListRefunds:
 # ── Imports ───────────────────────────────────────────────────────────────────
 
 class TestStatementImports:
-    _CSV_CONTENT = "date,amount,ref\n2024-01-01,100.00,REF001\n"
-
     def _b64(self) -> str:
         import base64
-        return base64.b64encode(self._CSV_CONTENT.encode()).decode()
+        content = f"date,amount,ref\n2024-01-01,100.00,REF{uuid.uuid4().hex[:8]}\n"
+        return base64.b64encode(content.encode()).decode()
 
     def test_finance_can_upload_import(self, api, finance_token, test_user_ids):
         r = api("POST", "/payments/imports", token=finance_token,

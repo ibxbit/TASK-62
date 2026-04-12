@@ -22,6 +22,8 @@ services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    ports:
+      - "5432:5432"
     environment:
       # POSTGRES_USER becomes the database superuser AND the application role.
       # The init script relies on this user matching the one expected in schema.sql.
