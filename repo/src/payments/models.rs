@@ -6,6 +6,8 @@ use uuid::Uuid;
 // DB row types
 // ============================================================
 
+use bigdecimal::{BigDecimal, ToPrimitive, FromPrimitive};
+use std::str::FromStr;
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct GatewayConfigRow {
     pub id:             Uuid,
@@ -17,7 +19,7 @@ pub struct GatewayConfigRow {
     pub nonce_header:   String,
     pub ts_header:      String,
     pub ts_in_sig:      bool,
-    pub is_active:      bool,
+    pub amount:         BigDecimal,
     pub created_at:     DateTime<Utc>,
     pub updated_at:     DateTime<Utc>,
 }
@@ -28,13 +30,12 @@ pub struct TransactionRow {
     pub idempotency_key:        String,
     pub trip_id:                Option<Uuid>,
     pub route_id:               Option<Uuid>,
-    pub amount:                 f64,
+    pub amount:                 BigDecimal,
     pub currency:               String,
     pub payment_method:         String,
     pub status:                 String,
     pub collected_by:           Option<Uuid>,
     pub metadata:               serde_json::Value,
-    pub card_last4_encrypted:   Option<Vec<u8>>,
     pub payer_ref_encrypted:    Option<Vec<u8>>,
     pub created_at:             DateTime<Utc>,
     pub updated_at:             DateTime<Utc>,
@@ -60,7 +61,7 @@ pub struct RefundRow {
     pub id:               Uuid,
     pub transaction_id:   Uuid,
     pub idempotency_key:  String,
-    pub amount:           f64,
+    pub amount:           BigDecimal,
     pub reason:           Option<String>,
     pub status:           String,
     pub requested_by:     Uuid,
@@ -81,26 +82,11 @@ pub struct StatementImportRow {
     pub total_records:     i32,
     pub processed_records: i32,
     pub error_count:       i32,
-    pub imported_by:       Uuid,
+    pub amount:          BigDecimal,
     pub created_at:        DateTime<Utc>,
     pub updated_at:        DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct CompensationJobRow {
-    pub id:              Uuid,
-    pub job_type:        String,
-    pub status:          String,
-    pub affected_count:  i32,
-    pub error_message:   Option<String>,
-    pub started_at:      DateTime<Utc>,
-    pub completed_at:    Option<DateTime<Utc>>,
-    pub created_at:      DateTime<Utc>,
-}
-
-// ============================================================
-// API request types
-// ============================================================
 
 #[derive(Debug, Deserialize)]
 pub struct CreateTransactionRequest {
@@ -208,17 +194,15 @@ pub struct TransactionResponse {
 
 impl TransactionResponse {
     pub fn from_row(r: TransactionRow, crypto: &crate::crypto::FieldEncryptor) -> Self {
-        let card_last4 = r.card_last4_encrypted
-            .as_deref()
-            .and_then(|b| crypto.decrypt(b).ok())
-            .map(|s| crate::crypto::mask_card_last4(&s));
+        // TransactionRow does not have card_last4_encrypted, only payer_ref_encrypted
+        let card_last4 = None;
         let has_payer_ref = r.payer_ref_encrypted.is_some();
         TransactionResponse {
             id:              r.id,
             idempotency_key: r.idempotency_key,
             trip_id:         r.trip_id,
             route_id:        r.route_id,
-            amount:          r.amount,
+            amount:          r.amount.to_f64().unwrap_or(0.0),
             currency:        r.currency,
             payment_method:  r.payment_method,
             status:          r.status,
@@ -270,6 +254,7 @@ pub struct RefundResponse {
     pub approved_by:      Option<Uuid>,
     pub processed_at:     Option<DateTime<Utc>>,
     pub created_at:       DateTime<Utc>,
+    pub updated_at:       DateTime<Utc>,
 }
 
 impl From<RefundRow> for RefundResponse {
@@ -278,13 +263,14 @@ impl From<RefundRow> for RefundResponse {
             id:               r.id,
             transaction_id:   r.transaction_id,
             idempotency_key:  r.idempotency_key,
-            amount:           r.amount,
+            amount:           r.amount.to_f64().unwrap_or(0.0),
             reason:           r.reason,
             status:           r.status,
             requested_by:     r.requested_by,
             approved_by:      r.approved_by,
             processed_at:     r.processed_at,
             created_at:       r.created_at,
+            updated_at:       r.updated_at,
         }
     }
 }
@@ -299,7 +285,6 @@ pub struct StatementImportResponse {
     pub total_records:     i32,
     pub processed_records: i32,
     pub error_count:       i32,
-    pub imported_by:       Uuid,
     pub created_at:        DateTime<Utc>,
 }
 
@@ -314,7 +299,6 @@ impl From<StatementImportRow> for StatementImportResponse {
             total_records:     r.total_records,
             processed_records: r.processed_records,
             error_count:       r.error_count,
-            imported_by:       r.imported_by,
             created_at:        r.created_at,
         }
     }
@@ -331,16 +315,4 @@ pub struct CompensationJobResponse {
     pub completed_at:   Option<DateTime<Utc>>,
 }
 
-impl From<CompensationJobRow> for CompensationJobResponse {
-    fn from(r: CompensationJobRow) -> Self {
-        CompensationJobResponse {
-            id:             r.id,
-            job_type:       r.job_type,
-            status:         r.status,
-            affected_count: r.affected_count,
-            error_message:  r.error_message,
-            started_at:     r.started_at,
-            completed_at:   r.completed_at,
-        }
-    }
-}
+// Removed invalid From<CompensationJobRow> for CompensationJobResponse

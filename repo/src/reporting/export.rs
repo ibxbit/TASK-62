@@ -105,10 +105,10 @@ pub fn to_pdf(
     );
 
     // Page dimensions (A4 in mm)
-    const PAGE_W: f64 = 210.0;
-    const PAGE_H: f64 = 297.0;
-    const MARGIN: f64 = 20.0;
-    const LINE_H: f64 = 7.0;
+    const PAGE_W: f32 = 210.0;
+    const PAGE_H: f32 = 297.0;
+    const MARGIN: f32 = 20.0;
+    const LINE_H: f32 = 7.0;
 
     // ---- helper: stamp diagonal watermark ----
     // Uses begin/set_text_matrix/write_text/end so rotation is applied correctly.
@@ -117,8 +117,8 @@ pub fn to_pdf(
         layer.begin_text_section();
         layer.set_font(&font_regular, 14.0);
         layer.set_text_matrix(TextMatrix::TranslateRotate(
-            Mm(PAGE_W / 2.0 - 60.0),
-            Mm(PAGE_H / 2.0 - 20.0),
+            Pt((PAGE_W / 2.0 - 60.0).into()),
+            Pt((PAGE_H / 2.0 - 20.0).into()),
             45.0,
         ));
         layer.write_text(watermark_text.clone(), &font_regular);
@@ -128,13 +128,13 @@ pub fn to_pdf(
 
     // Track current page layer and Y cursor
     let mut current_layer = doc.get_page(page1).get_layer(layer1);
-    let mut cursor_y: f64 = PAGE_H - MARGIN;
+    let mut cursor_y: f32 = PAGE_H - MARGIN;
     stamp_watermark(&current_layer);
 
     // Macro: ensure N lines of space; breaks to a new page if not enough room.
     macro_rules! ensure_space {
         ($lines:expr) => {
-            if cursor_y < MARGIN + ($lines as f64) * LINE_H {
+            if cursor_y < MARGIN + ($lines as f32) * LINE_H {
                 let (new_page, new_layer) = doc.add_page(Mm(PAGE_W), Mm(PAGE_H), "Layer 1");
                 current_layer = doc.get_page(new_page).get_layer(new_layer);
                 cursor_y = PAGE_H - MARGIN;

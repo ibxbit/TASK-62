@@ -1,3 +1,4 @@
+use actix_web::HttpMessage;
 /// Session validation via Actix-web `FromRequest` extractors.
 ///
 /// Two extractors are provided:

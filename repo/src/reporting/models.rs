@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use bigdecimal::BigDecimal;
 use uuid::Uuid;
 
 // ============================================================
@@ -56,7 +57,7 @@ pub struct ScheduledReportRow {
     pub updated_at:         DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize, Deserialize)]
 pub struct ReportRunRow {
     pub id:              Uuid,
     pub scheduled_id:    Option<Uuid>,
@@ -73,6 +74,7 @@ pub struct ReportRunRow {
     pub error_message:   Option<String>,
     pub started_at:      Option<DateTime<Utc>>,
     pub completed_at:    Option<DateTime<Utc>>,
+    pub value:           Option<BigDecimal>,
     pub created_at:      DateTime<Utc>,
 }
 
@@ -143,9 +145,7 @@ pub struct CreateMetricRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateMetricRequest {
     pub display_name:   Option<String>,
-    pub description:    Option<String>,
     pub dimension_keys: Option<Vec<String>>,
-    pub config:         Option<Value>,
     pub is_active:      Option<bool>,
 }
 
@@ -295,6 +295,7 @@ impl From<ReportRunRow> for ReportRunResponse {
             started_at:    r.started_at,
             completed_at:  r.completed_at,
             created_at:    r.created_at,
+            // Add value if needed in ReportRunResponse
         }
     }
 }

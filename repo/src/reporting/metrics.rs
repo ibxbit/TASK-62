@@ -148,7 +148,7 @@ async fn compute_refund_rate(
         total:        i64,
     }
 
-    let rows = sqlx::query_as!(
+    let rows: Vec<Row> = sqlx::query_as!(
         Row,
         r#"
         SELECT
@@ -215,7 +215,7 @@ async fn compute_reconciliation_mismatch_count(
         total:          i64,
     }
 
-    let rows = sqlx::query_as!(
+    let rows: Vec<Row> = sqlx::query_as!(
         Row,
         r#"
         SELECT

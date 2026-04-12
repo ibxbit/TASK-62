@@ -74,10 +74,10 @@ pub async fn create_metric(
                   formula_type, dimension_keys, config,
                   is_builtin, is_active, created_at, updated_at
         "#,
-        body.metric_key,
-        body.display_name,
-        body.description,
-        body.formula_type,
+        body.metric_key.clone(),
+        body.display_name.clone(),
+        body.description.clone(),
+        body.formula_type.clone(),
         &dim_keys,
         config,
     )
@@ -159,9 +159,9 @@ pub async fn update_metric(
     .await?
     .ok_or_else(|| AppError::NotFound("Metric not found".to_string()))?;
 
-    if existing.is_builtin && (body.dimension_keys.is_some() || body.config.is_some()) {
+    if existing.is_builtin && body.0.dimension_keys.is_some() {
         return Err(AppError::BadRequest(
-            "built-in metric dimension_keys and config are immutable".to_string(),
+            "built-in metric dimension_keys are immutable".to_string(),
         ));
     }
 
@@ -171,11 +171,11 @@ pub async fn update_metric(
         "is_active":    existing.is_active,
     });
 
-    let display_name   = body.display_name.clone().unwrap_or(existing.display_name);
-    let description    = body.description.clone().or(existing.description);
-    let dimension_keys = body.dimension_keys.clone().unwrap_or(existing.dimension_keys);
-    let config         = body.config.clone().unwrap_or(existing.config);
-    let is_active      = body.is_active.unwrap_or(existing.is_active);
+    let display_name   = body.0.display_name.clone().unwrap_or(existing.display_name);
+    let dimension_keys = body.0.dimension_keys.clone().unwrap_or(existing.dimension_keys);
+    let is_active      = body.0.is_active.unwrap_or(existing.is_active);
+    let description    = existing.description.clone();
+    let config         = existing.config.clone();
 
     let row = sqlx::query_as!(
         super::models::MetricDefinitionRow,
@@ -620,16 +620,16 @@ pub async fn list_runs(
     session.require(Permission::ReportingRead)?;
 
     let rows = sqlx::query_as!(
-        super::models::ReportRunRow,
-        r#"
-        SELECT id, scheduled_id, trigger_user_id, metric_ids,
-               route_id, depot_id, date_from, date_to,
-               granularity, output_format, status,
-               result_data, error_message, started_at, completed_at, created_at
-        FROM reporting.report_runs
-        ORDER BY created_at DESC
-        LIMIT 50
-        "#,
+                 super::models::ReportRunRow,
+                 r#"
+                 SELECT id, scheduled_id, trigger_user_id, metric_ids,
+                     route_id, depot_id, date_from, date_to,
+                     granularity, output_format, status,
+                     result_data, error_message, started_at, completed_at, value::numeric, created_at
+                 FROM reporting.report_runs
+                 ORDER BY created_at DESC
+                 LIMIT 50
+                 "#
     )
     .fetch_all(&state.db)
     .await?;
@@ -648,15 +648,15 @@ pub async fn get_run(
     let id = *path;
 
     let row = sqlx::query_as!(
-        super::models::ReportRunRow,
-        r#"
-        SELECT id, scheduled_id, trigger_user_id, metric_ids,
-               route_id, depot_id, date_from, date_to,
-               granularity, output_format, status,
-               result_data, error_message, started_at, completed_at, created_at
-        FROM reporting.report_runs WHERE id = $1
-        "#,
-        id,
+                 super::models::ReportRunRow,
+                 r#"
+                 SELECT id, scheduled_id, trigger_user_id, metric_ids,
+                     route_id, depot_id, date_from, date_to,
+                     granularity, output_format, status,
+                     result_data, error_message, started_at, completed_at, value::numeric, created_at
+                 FROM reporting.report_runs WHERE id = $1
+                 "#,
+             id
     )
     .fetch_optional(&state.db)
     .await?
@@ -682,15 +682,15 @@ pub async fn export_run(
     let id = *path;
 
     let row = sqlx::query_as!(
-        super::models::ReportRunRow,
-        r#"
-        SELECT id, scheduled_id, trigger_user_id, metric_ids,
-               route_id, depot_id, date_from, date_to,
-               granularity, output_format, status,
-               result_data, error_message, started_at, completed_at, created_at
-        FROM reporting.report_runs WHERE id = $1
-        "#,
-        id,
+         super::models::ReportRunRow,
+         r#"
+         SELECT id, scheduled_id, trigger_user_id, metric_ids,
+             route_id, depot_id, date_from, date_to,
+             granularity, output_format, status,
+             result_data, error_message, started_at, completed_at, value::numeric, created_at
+         FROM reporting.report_runs WHERE id = $1
+         "#,
+         id
     )
     .fetch_optional(&state.db)
     .await?

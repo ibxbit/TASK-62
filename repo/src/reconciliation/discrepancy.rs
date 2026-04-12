@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 
 use super::models::{DiscrepancyType, StatementRecord};
+use bigdecimal::BigDecimal;
+use std::str::FromStr;
 
 // ============================================================
 // Tolerance constant
@@ -14,7 +16,7 @@ use super::models::{DiscrepancyType, StatementRecord};
 /// Maximum permitted difference between DB amount and statement amount for
 /// a pair to be classified as `matched`.  Anything strictly greater than this
 /// is `amount_mismatch`.
-pub const AMOUNT_TOLERANCE: f64 = 0.01; // $0.01
+pub const AMOUNT_TOLERANCE: &str = "0.01"; // $0.01
 
 // ============================================================
 // Duplicate detection
@@ -60,8 +62,9 @@ pub fn canonical_index(indices: &[usize]) -> usize {
 ///
 /// Assumes both amounts are non-negative and the pair has already been matched
 /// on transaction reference (i.e. they refer to the same transaction).
-pub fn classify_amounts(expected: f64, actual: f64) -> DiscrepancyType {
-    if (expected - actual).abs() <= AMOUNT_TOLERANCE {
+pub fn classify_amounts(expected: &BigDecimal, actual: &BigDecimal) -> DiscrepancyType {
+    let tolerance = BigDecimal::from_str(AMOUNT_TOLERANCE).unwrap();
+    if (expected - actual).abs() <= tolerance {
         DiscrepancyType::Matched
     } else {
         DiscrepancyType::AmountMismatch
@@ -71,7 +74,7 @@ pub fn classify_amounts(expected: f64, actual: f64) -> DiscrepancyType {
 /// Compute the net financial discrepancy: `actual − expected`.
 ///
 /// Positive → over-collected.  Negative → under-collected.
-pub fn net_discrepancy(expected: f64, actual: f64) -> f64 {
+pub fn net_discrepancy(expected: &BigDecimal, actual: &BigDecimal) -> BigDecimal {
     actual - expected
 }
 

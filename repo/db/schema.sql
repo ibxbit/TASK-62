@@ -1,18 +1,9 @@
 -- =============================================================================
 -- TransitOps Backoffice Platform — PostgreSQL Schema
 -- =============================================================================
--- Schemas:  auth | ops | notifications | payments | reporting | audit
--- Requires: pgcrypto (encryption), pg_partman (audit partitioning optional)
--- =============================================================================
 
 -- ---------------------------------------------------------------------------
--- Extensions
--- ---------------------------------------------------------------------------
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";   -- gen_random_uuid(), pgp_sym_encrypt
-CREATE EXTENSION IF NOT EXISTS "btree_gist"; -- exclusion constraints on ranges
-
--- ---------------------------------------------------------------------------
--- Schemas
+-- Ensure all schemas exist before creating tables in them
 -- ---------------------------------------------------------------------------
 CREATE SCHEMA IF NOT EXISTS auth;
 CREATE SCHEMA IF NOT EXISTS ops;
@@ -21,10 +12,32 @@ CREATE SCHEMA IF NOT EXISTS payments;
 CREATE SCHEMA IF NOT EXISTS reporting;
 CREATE SCHEMA IF NOT EXISTS audit;
 
+-- Ensure the transitops_app user and database exist (idempotent)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'transitops_app') THEN
+        CREATE ROLE transitops_app LOGIN PASSWORD 'transitops_secret';
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_database WHERE datname = 'transitops') THEN
+        CREATE DATABASE transitops OWNER transitops_app;
+    END IF;
+END$$;
 
--- =============================================================================
--- SCHEMA: auth
--- =============================================================================
+
+-- ...existing code...
+
+
+-- ...existing code...
+
+
+-- ...existing code...
+
+
+
+-- ...existing code...
+
+
+
 
 -- ---------------------------------------------------------------------------
 -- roles
@@ -36,11 +49,6 @@ CREATE TABLE auth.roles (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- ---------------------------------------------------------------------------
--- permissions
--- ---------------------------------------------------------------------------
-CREATE TABLE auth.permissions (
-    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     name        VARCHAR(128) NOT NULL UNIQUE,  -- e.g. ops:trips:write
     domain      VARCHAR(64)  NOT NULL,         -- ops | payments | notifications | reporting | audit
     action      VARCHAR(32)  NOT NULL,         -- read | write | delete | admin
@@ -54,10 +62,12 @@ CREATE TABLE auth.permissions (
 CREATE TABLE auth.role_permissions (
     role_id       UUID NOT NULL REFERENCES auth.roles(id) ON DELETE CASCADE,
     permission_id UUID NOT NULL REFERENCES auth.permissions(id) ON DELETE CASCADE,
-    granted_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (role_id, permission_id)
 );
-
+CREATE INDEX idx_txn_trip_id    ON payments.transactions(trip_id);
+CREATE INDEX idx_txn_status     ON payments.transactions(status);
+CREATE INDEX idx_txn_created_at ON payments.transactions(created_at DESC);
+CREATE INDEX idx_txn_collected_by ON payments.transactions(collected_by);
+    granted_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
 -- ---------------------------------------------------------------------------
 -- users
 -- Sensitive PII (email, full_name) stored encrypted via pgp_sym_encrypt.
@@ -67,10 +77,10 @@ CREATE TABLE auth.users (
     id                 UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     username           VARCHAR(64) NOT NULL UNIQUE,
     -- email and full_name are application-encrypted (pgp_sym_encrypt); stored as BYTEA
+);
+CREATE INDEX idx_subscriptions_user_event ON notifications.subscriptions(user_id, event_type)
+     WHERE is_active = TRUE;
     email_encrypted    BYTEA       NOT NULL,
-    full_name_encrypted BYTEA      NOT NULL,
-    password_hash      TEXT        NOT NULL,   -- argon2id hash
-    role_id            UUID        NOT NULL REFERENCES auth.roles(id),
     is_active          BOOLEAN     NOT NULL DEFAULT TRUE,
     last_login_at      TIMESTAMPTZ,
     password_changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -81,6 +91,9 @@ CREATE TABLE auth.users (
 
 CREATE INDEX idx_users_role_id   ON auth.users(role_id);
 CREATE INDEX idx_users_is_active ON auth.users(is_active) WHERE deleted_at IS NULL;
+);
+CREATE INDEX idx_deliveries_event_id    ON notifications.deliveries(event_id);
+CREATE INDEX idx_deliveries_created_at  ON notifications.deliveries(created_at DESC);
 
 -- ---------------------------------------------------------------------------
 -- sessions
@@ -222,13 +235,75 @@ CREATE INDEX idx_config_versions_template ON ops.config_versions(template_id, st
 -- ---------------------------------------------------------------------------
 -- event_definitions  — registry of known event types
 -- ---------------------------------------------------------------------------
+
 CREATE TABLE notifications.event_definitions (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     event_type   VARCHAR(128) NOT NULL UNIQUE,  -- e.g. 'ops.trip.created'
     domain       VARCHAR(64)  NOT NULL,
     description  TEXT,
     payload_schema JSONB,                        -- expected payload shape
+    severity     VARCHAR(16) DEFAULT 'info',     -- ADDED COLUMN
     created_at   TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+-- ---------------------------------------------------------------------------
+-- scheduler.job_runs
+-- ---------------------------------------------------------------------------
+CREATE TABLE scheduler.job_runs (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_name   VARCHAR(128) NOT NULL,
+    status     VARCHAR(32) NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at TIMESTAMPTZ,
+    error      TEXT
+);
+
+-- ---------------------------------------------------------------------------
+-- payments.compensation_jobs
+-- ---------------------------------------------------------------------------
+CREATE TABLE payments.compensation_jobs (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    job_type        TEXT        NOT NULL
+                                CHECK (job_type IN ('stuck_transactions', 'pending_refunds', 'callback_retry')),
+    status          TEXT        NOT NULL DEFAULT 'running'
+                                CHECK (status IN ('running', 'completed', 'failed')),
+    affected_count  INT         NOT NULL DEFAULT 0,
+    error_message   TEXT,
+    started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_comp_jobs_type   ON payments.compensation_jobs (job_type, created_at DESC);
+CREATE INDEX idx_comp_jobs_status ON payments.compensation_jobs (status);
+-- ---------------------------------------------------------------------------
+-- payments.reconciliation_entries (view) — cents-based projection for reporting
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW payments.reconciliation_entries AS
+SELECT
+    ri.id,
+    ri.transaction_id,
+    ROUND(ri.expected_amount * 100)::BIGINT AS expected_amount_cents,
+    ROUND(ri.actual_amount   * 100)::BIGINT AS settled_amount_cents,
+    rr.run_date::TIMESTAMPTZ               AS reconciled_at,
+    tx.route_id
+FROM payments.reconciliation_items ri
+JOIN payments.reconciliation_runs rr ON rr.id = ri.run_id
+LEFT JOIN payments.transactions  tx  ON tx.id = ri.transaction_id;
+
+-- ---------------------------------------------------------------------------
+-- ops.rollout_stages
+-- ---------------------------------------------------------------------------
+CREATE TABLE ops.rollout_stages (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    plan_id         UUID NOT NULL,
+    stage_number    INT NOT NULL,
+    depot_ids       UUID[] NOT NULL DEFAULT '{}',
+    status          VARCHAR(32) NOT NULL DEFAULT 'pending',
+    scheduled_at    TIMESTAMPTZ,
+    started_at      TIMESTAMPTZ,
+    completed_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ---------------------------------------------------------------------------
@@ -252,9 +327,6 @@ CREATE INDEX idx_events_entity      ON notifications.events(source_domain, sourc
 
 -- ---------------------------------------------------------------------------
 -- subscriptions  — per-user channel subscriptions per event type
--- ---------------------------------------------------------------------------
-CREATE TABLE notifications.subscriptions (
-    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id     UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     event_type  VARCHAR(128) NOT NULL
                     REFERENCES notifications.event_definitions(event_type)
@@ -262,9 +334,6 @@ CREATE TABLE notifications.subscriptions (
     channel     VARCHAR(16)  NOT NULL CHECK (channel IN ('inbox','email','sms','wecom')),
     is_active   BOOLEAN      NOT NULL DEFAULT TRUE,
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    UNIQUE (user_id, event_type, channel)
-);
 
 CREATE INDEX idx_subscriptions_user_event ON notifications.subscriptions(user_id, event_type)
     WHERE is_active = TRUE;
@@ -274,9 +343,6 @@ CREATE INDEX idx_subscriptions_user_event ON notifications.subscriptions(user_id
 -- ---------------------------------------------------------------------------
 CREATE TABLE notifications.deliveries (
     id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_id      UUID        NOT NULL REFERENCES notifications.events(id) ON DELETE CASCADE,
-    user_id       UUID        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-    channel       VARCHAR(16) NOT NULL CHECK (channel IN ('inbox','email','sms','wecom')),
     status        VARCHAR(16) NOT NULL DEFAULT 'pending'
                               CHECK (status IN ('pending','sent','delivered','failed','suppressed')),
     sent_at       TIMESTAMPTZ,
@@ -284,11 +350,6 @@ CREATE TABLE notifications.deliveries (
     read_at       TIMESTAMPTZ,
     retry_count   SMALLINT    NOT NULL DEFAULT 0,
     error_message TEXT,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX idx_deliveries_user_status ON notifications.deliveries(user_id, status);
 CREATE INDEX idx_deliveries_event_id    ON notifications.deliveries(event_id);
 CREATE INDEX idx_deliveries_created_at  ON notifications.deliveries(created_at DESC);
 
@@ -308,9 +369,6 @@ CREATE TABLE notifications.inbox_messages (
 
 CREATE INDEX idx_inbox_user_unread ON notifications.inbox_messages(user_id, is_read)
     WHERE is_read = FALSE;
-
--- ---------------------------------------------------------------------------
--- dnd_settings  — Do-Not-Disturb per user
 -- days_of_week: 0=Sun … 6=Sat
 -- ---------------------------------------------------------------------------
 CREATE TABLE notifications.dnd_settings (
@@ -327,10 +385,6 @@ CREATE TABLE notifications.dnd_settings (
         CHECK (start_time IS NULL OR end_time IS NULL OR end_time > start_time)
 );
 
-
--- =============================================================================
--- SCHEMA: payments
--- =============================================================================
 
 -- ---------------------------------------------------------------------------
 -- payment_transactions
@@ -349,13 +403,7 @@ CREATE TABLE payments.transactions (
                                            CHECK (status IN ('pending','completed','failed','refunded','partially_refunded','voided')),
     collected_by            UUID           REFERENCES auth.users(id),
     -- encrypted sensitive fields
-    card_last4_encrypted    BYTEA,         -- pgp_sym_encrypt of last 4 digits
-    payer_ref_encrypted     BYTEA,         -- pgp_sym_encrypt of external payer ID
-    metadata                JSONB          NOT NULL DEFAULT '{}',
     created_at              TIMESTAMPTZ    NOT NULL DEFAULT now(),
-    updated_at              TIMESTAMPTZ    NOT NULL DEFAULT now()
-);
-
 CREATE INDEX idx_txn_trip_id    ON payments.transactions(trip_id);
 CREATE INDEX idx_txn_status     ON payments.transactions(status);
 CREATE INDEX idx_txn_created_at ON payments.transactions(created_at DESC);
@@ -371,7 +419,6 @@ CREATE TABLE payments.callbacks (
     nonce           VARCHAR(256) NOT NULL UNIQUE,   -- replay-prevention
     signature       TEXT        NOT NULL,           -- HMAC or provider signature
     payload_hash    TEXT        NOT NULL,           -- SHA-256 of raw payload
-    payload         JSONB       NOT NULL,
     source          VARCHAR(64) NOT NULL,           -- provider name
     received_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     processed_at    TIMESTAMPTZ,
@@ -504,19 +551,18 @@ CREATE INDEX idx_stmt_lines_matched_txn ON payments.statement_import_lines(match
 -- metric_definitions
 -- ---------------------------------------------------------------------------
 CREATE TABLE reporting.metric_definitions (
-    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    code             VARCHAR(64) NOT NULL UNIQUE,
-    name             VARCHAR(128) NOT NULL,
-    description      TEXT,
-    domain           VARCHAR(64)  NOT NULL,
-    unit             VARCHAR(32)  NOT NULL
-                                  CHECK (unit IN ('count','percentage','currency','duration_seconds','ratio','custom')),
-    aggregation_type VARCHAR(16)  NOT NULL
-                                  CHECK (aggregation_type IN ('sum','avg','count','max','min','latest')),
-    query_template   TEXT,        -- parameterised SQL or formula string; executed by reporting engine
-    is_active        BOOLEAN      NOT NULL DEFAULT TRUE,
-    created_at       TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    updated_at       TIMESTAMPTZ  NOT NULL DEFAULT now()
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    metric_key          TEXT        NOT NULL UNIQUE,
+    display_name        TEXT        NOT NULL,
+    description         TEXT,
+    formula_type        TEXT        NOT NULL
+        CHECK (formula_type IN ('on_time_departure_rate', 'refund_rate', 'reconciliation_mismatch_count', 'custom_sql')),
+    dimension_keys      TEXT[]      NOT NULL DEFAULT '{}',
+    config              JSONB       NOT NULL DEFAULT '{}',
+    is_builtin          BOOLEAN     NOT NULL DEFAULT FALSE,
+    is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ---------------------------------------------------------------------------
@@ -585,10 +631,7 @@ CREATE TABLE audit.audit_logs (
     session_id       UUID,
     metadata         JSONB       NOT NULL DEFAULT '{}',
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    retention_until  DATE        NOT NULL
-                         GENERATED ALWAYS AS (
-                             (created_at + INTERVAL '7 years')::DATE
-                         ) STORED,
+    retention_until  DATE        NOT NULL,
     PRIMARY KEY (id, created_at)   -- composite PK required for partitioning
 ) PARTITION BY RANGE (created_at);
 

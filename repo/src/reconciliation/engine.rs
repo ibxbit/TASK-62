@@ -22,6 +22,7 @@ use super::discrepancy::{
     canonical_index, classify_amounts, find_duplicates, is_duplicate, DiscrepancySummary,
     AMOUNT_TOLERANCE,
 };
+use bigdecimal::ToPrimitive;
 use super::models::{
     DiscrepancyType, ReconItem, ReconciliationOutput, StatementRecord,
 };
@@ -35,7 +36,7 @@ struct TxnRow {
     id:               Uuid,
     idempotency_key:  String,
     /// Cast to float8 in SQL to avoid requiring the rust_decimal feature.
-    amount:           f64,
+    amount:           bigdecimal::BigDecimal,
 }
 
 // ============================================================
@@ -47,7 +48,7 @@ struct LineRow {
     id:              Uuid,
     transaction_ref: Option<String>,
     /// Cast to float8 in SQL.
-    amount:          f64,
+    amount:          bigdecimal::BigDecimal,
 }
 
 // ============================================================
@@ -100,24 +101,24 @@ pub async fn run(
 
     // ---- 3. Load DB transactions for run_date ----
     // Cast NUMERIC → float8 to avoid requiring the rust_decimal sqlx feature.
-    let db_txns: Vec<TxnRow> = sqlx::query_as!(
-        TxnRow,
-        r#"
-        SELECT id, idempotency_key, amount::double precision AS "amount!: f64"
-        FROM   payments.transactions
-        WHERE  status         = 'completed'
-          AND  created_at::date = $1
-        "#,
-        run_date,
-    )
-    .fetch_all(pool)
-    .await?;
+        let db_txns: Vec<TxnRow> = sqlx::query_as!(
+                TxnRow,
+                r#"
+                SELECT id, idempotency_key, amount
+                FROM   payments.transactions
+                WHERE  status         = 'completed'
+                    AND  created_at::date = $1
+                "#,
+                run_date,
+        )
+        .fetch_all(pool)
+        .await?;
 
     // ---- 4. Load statement_import_lines for this import ----
     let stmt_lines: Vec<LineRow> = sqlx::query_as!(
         LineRow,
         r#"
-        SELECT id, transaction_ref, amount::double precision AS "amount!: f64"
+        SELECT id, transaction_ref, amount
         FROM   payments.statement_import_lines
         WHERE  import_id = $1
         "#,
@@ -128,7 +129,7 @@ pub async fn run(
 
     // Build a map: normalised_ref → line_id (only non-duplicate canonical lines)
     let mut ref_to_line: HashMap<String, Uuid> = HashMap::new();
-    let mut ref_to_stmt_amount: HashMap<String, f64> = HashMap::new();
+    let mut ref_to_stmt_amount: HashMap<String, bigdecimal::BigDecimal> = HashMap::new();
     for (idx, line) in stmt_lines.iter().enumerate() {
         if let Some(r) = &line.transaction_ref {
             let is_dup = dup_map.contains_key(r.as_str())
@@ -137,7 +138,7 @@ pub async fn run(
                     .map_or(false, |&ci| ci == idx);
             if !is_dup {
                 ref_to_line.insert(r.clone(), line.id);
-                ref_to_stmt_amount.insert(r.clone(), line.amount);
+                ref_to_stmt_amount.insert(r.clone(), line.amount.clone());
             }
         }
     }
@@ -149,31 +150,31 @@ pub async fn run(
 
     for txn in &db_txns {
         let stmt_line_id   = ref_to_line.get(&txn.idempotency_key).copied();
-        let stmt_amount    = ref_to_stmt_amount.get(&txn.idempotency_key).copied();
+        let stmt_amount    = ref_to_stmt_amount.get(&txn.idempotency_key).cloned();
 
         let (disc, stmt_id, actual) = match (stmt_line_id, stmt_amount) {
             // Primary match by idempotency_key
             (Some(lid), Some(sa)) => {
                 matched_stmt_refs.insert(txn.idempotency_key.clone());
-                let dtype = classify_amounts(txn.amount, sa);
-                (dtype, Some(lid), sa)
+                let dtype = classify_amounts(&txn.amount, &sa);
+                (dtype, Some(lid), sa.clone())
             }
-            // Fallback: no ref match — look for amount+date match among unmatched lines
+            // Fallback: no ref match  look for amount+date match among unmatched lines
             _ => {
                 let fallback = stmt_lines.iter().find(|l| {
                     l.transaction_ref.as_deref().map_or(true, |r| !matched_stmt_refs.contains(r))
-                        && (l.amount - txn.amount).abs() <= AMOUNT_TOLERANCE
+                        && (l.amount.to_f64().unwrap_or(0.0) - txn.amount.to_f64().unwrap_or(0.0)).abs() <= AMOUNT_TOLERANCE.parse::<f64>().unwrap_or(0.0)
                 });
                 match fallback {
                     Some(fl) => {
                         if let Some(r) = &fl.transaction_ref {
                             matched_stmt_refs.insert(r.clone());
                         }
-                        (DiscrepancyType::Matched, Some(fl.id), fl.amount)
+                        (DiscrepancyType::Matched, Some(fl.id), fl.amount.clone())
                     }
                     None => {
                         // DB transaction not found in statement
-                        (DiscrepancyType::MissingFromStatement, None, 0.0)
+                        (DiscrepancyType::MissingFromStatement, None, bigdecimal::BigDecimal::from(0))
                     }
                 }
             }
@@ -189,7 +190,7 @@ pub async fn run(
         items.push(ReconItem {
             transaction_id:    Some(txn.id),
             statement_line_id: stmt_id,
-            expected_amount:   txn.amount,
+            expected_amount:   txn.amount.clone(),
             actual_amount:     actual,
             discrepancy_type:  disc,
             notes:             None,
@@ -227,16 +228,16 @@ pub async fn run(
         items.push(ReconItem {
             transaction_id:    None,
             statement_line_id: Some(line.id),
-            expected_amount:   0.0,
-            actual_amount:     line.amount,
+            expected_amount:   bigdecimal::BigDecimal::from(0),
+            actual_amount:     line.amount.clone(),
             discrepancy_type:  dtype,
             notes:             None,
         });
     }
 
     // ---- 7. Persist reconciliation_items ----
-    let total_expected:  f64 = db_txns.iter().map(|t| t.amount).sum();
-    let total_collected: f64 = stmt_lines.iter().map(|l| l.amount).sum();
+    let total_expected:  bigdecimal::BigDecimal = db_txns.iter().map(|t| t.amount.clone()).sum();
+    let total_collected: bigdecimal::BigDecimal = stmt_lines.iter().map(|l| l.amount.clone()).sum();
 
     for item in &items {
         sqlx::query!(
@@ -294,8 +295,8 @@ pub async fn run(
         run_date,
         &summary,
         total_records,
-        total_expected,
-        total_collected,
+        total_expected.clone(),
+        total_collected.clone(),
     )
     .await?;
 
@@ -313,8 +314,8 @@ pub async fn run(
             summary.missing_from_statement,
             summary.extra_in_statement,
             summary.duplicates,
-            total_expected,
-            total_collected,
+            total_expected.to_f64().unwrap_or(0.0),
+            total_collected.to_f64().unwrap_or(0.0),
             is_high,
         )
         .await
@@ -352,8 +353,8 @@ async fn emit_reconciliation_events(
     run_date:          NaiveDate,
     summary:           &DiscrepancySummary,
     total_records:     usize,
-    total_expected:    f64,
-    total_collected:   f64,
+    total_expected:    bigdecimal::BigDecimal,
+    total_collected:   bigdecimal::BigDecimal,
 ) -> Result<(), sqlx::Error> {
     let base_payload = serde_json::json!({
         "run_id":           run_id,
@@ -364,8 +365,8 @@ async fn emit_reconciliation_events(
         "extra_in_statement": summary.extra_in_statement,
         "duplicates":       summary.duplicates,
         "discrepancy_count": summary.total_discrepancies(),
-        "total_expected":   total_expected,
-        "total_collected":  total_collected,
+        "total_expected":   total_expected.to_string(),
+        "total_collected":  total_collected.to_string(),
     });
 
     // Always: reconciliation completed

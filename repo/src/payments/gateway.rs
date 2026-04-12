@@ -178,11 +178,11 @@ pub async fn load_gateway(
     let row = sqlx::query_as!(
         GatewayConfigRow,
         r#"
-        SELECT id, name, display_name, hmac_secret, hmac_algorithm,
+        SELECT id, name, display_name, hmac_secret, hmac_algorithm, amount,
                sig_header, nonce_header, ts_header, ts_in_sig,
-               is_active, created_at, updated_at
+               created_at, updated_at
         FROM payments.gateway_configs
-        WHERE name = $1 AND is_active = TRUE
+        WHERE name = $1
         "#,
         name,
     )
@@ -215,11 +215,11 @@ pub async fn list_gateways(pool: &PgPool) -> Result<Vec<GatewayConfigRow>, sqlx:
     sqlx::query_as!(
         GatewayConfigRow,
         r#"
-        SELECT id, name, display_name, hmac_secret, hmac_algorithm,
+        SELECT id, name, display_name, hmac_secret, hmac_algorithm, amount,
                sig_header, nonce_header, ts_header, ts_in_sig,
-               is_active, created_at, updated_at
+               created_at, updated_at
         FROM payments.gateway_configs
-        WHERE is_active = TRUE
+        -- removed is_active filter
         ORDER BY name
         "#,
     )

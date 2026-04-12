@@ -1,3 +1,5 @@
+use bigdecimal::BigDecimal;
+use bigdecimal::FromPrimitive;
 /// Reconciliation statement importer — strict CSV format validation and
 /// SHA-256 fingerprint verification.
 ///
@@ -176,6 +178,7 @@ pub fn validate_and_parse(content: &[u8]) -> ParseResult {
             ));
             continue;
         }
+        let amount = BigDecimal::from_f64(amount).unwrap();
 
         // --- type ---
         let entry_type = match get(type_col).to_lowercase().as_str() {

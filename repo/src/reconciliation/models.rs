@@ -1,4 +1,6 @@
 use chrono::{DateTime, NaiveDate, Utc};
+use bigdecimal::BigDecimal;
+use bigdecimal::Zero;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -11,7 +13,7 @@ use uuid::Uuid;
 pub struct StatementRecord {
     /// The provider-assigned unique reference for this entry.
     pub reference:   String,
-    pub amount:      f64,          // always positive
+    pub amount:      BigDecimal,          // always positive
     pub entry_type:  EntryType,
     pub date:        NaiveDate,
     pub description: Option<String>,
@@ -102,9 +104,9 @@ pub struct ReconItem {
     pub transaction_id:    Option<Uuid>,
     pub statement_line_id: Option<Uuid>,
     /// Amount from DB transaction (0 if not found).
-    pub expected_amount:   f64,
+    pub expected_amount:   BigDecimal,
     /// Amount from statement (0 if not found).
-    pub actual_amount:     f64,
+    pub actual_amount:     BigDecimal,
     pub discrepancy_type:  DiscrepancyType,
     pub notes:             Option<String>,
 }
@@ -122,8 +124,8 @@ pub struct ReconciliationOutput {
     pub missing_from_stmt:  usize,
     pub extra_in_stmt:      usize,
     pub duplicates:         usize,
-    pub total_expected:     f64,
-    pub total_collected:    f64,
+    pub total_expected:     BigDecimal,
+    pub total_collected:    BigDecimal,
     pub items:              Vec<ReconItem>,
 }
 
@@ -148,8 +150,8 @@ pub struct ReconciliationRunRow {
     pub run_date:             NaiveDate,
     pub status:               String,
     pub statement_import_id:  Option<Uuid>,
-    pub total_expected:       f64,
-    pub total_collected:      f64,
+    pub total_expected:       Option<BigDecimal>,
+    pub total_collected:      Option<BigDecimal>,
     pub discrepancy_count:    i32,
     pub started_at:           Option<DateTime<Utc>>,
     pub completed_at:         Option<DateTime<Utc>>,
@@ -164,8 +166,8 @@ pub struct ReconciliationItemRow {
     pub id:                Uuid,
     pub run_id:            Uuid,
     pub transaction_id:    Option<Uuid>,
-    pub expected_amount:   f64,
-    pub actual_amount:     f64,
+    pub expected_amount:   Option<BigDecimal>,
+    pub actual_amount:     Option<BigDecimal>,
     pub match_status:      String,
     pub discrepancy_type:  Option<String>,
     pub notes:             Option<String>,
@@ -215,9 +217,9 @@ pub struct RunResponse {
     pub run_date:            NaiveDate,
     pub status:              String,
     pub statement_import_id: Option<Uuid>,
-    pub total_expected:      f64,
-    pub total_collected:     f64,
-    pub total_discrepancy:   f64,
+    pub total_expected:      BigDecimal,
+    pub total_collected:     BigDecimal,
+    pub total_discrepancy:   BigDecimal,
     pub discrepancy_count:   i32,
     pub started_at:          Option<DateTime<Utc>>,
     pub completed_at:        Option<DateTime<Utc>>,
@@ -229,13 +231,13 @@ pub struct RunResponse {
 impl From<ReconciliationRunRow> for RunResponse {
     fn from(r: ReconciliationRunRow) -> Self {
         RunResponse {
-            total_discrepancy: r.total_collected - r.total_expected,
+            total_discrepancy: r.total_collected.clone().unwrap_or_else(BigDecimal::zero) - r.total_expected.clone().unwrap_or_else(BigDecimal::zero),
             id:                  r.id,
             run_date:            r.run_date,
             status:              r.status,
             statement_import_id: r.statement_import_id,
-            total_expected:      r.total_expected,
-            total_collected:     r.total_collected,
+            total_expected:      r.total_expected.unwrap_or_else(BigDecimal::zero),
+            total_collected:     r.total_collected.unwrap_or_else(BigDecimal::zero),
             discrepancy_count:   r.discrepancy_count,
             started_at:          r.started_at,
             completed_at:        r.completed_at,
@@ -251,9 +253,9 @@ pub struct ItemResponse {
     pub id:               Uuid,
     pub run_id:           Uuid,
     pub transaction_id:   Option<Uuid>,
-    pub expected_amount:  f64,
-    pub actual_amount:    f64,
-    pub discrepancy:      f64,
+    pub expected_amount:  BigDecimal,
+    pub actual_amount:    BigDecimal,
+    pub discrepancy:      BigDecimal,
     pub match_status:     String,
     pub discrepancy_type: Option<String>,
     pub notes:            Option<String>,
@@ -263,12 +265,12 @@ pub struct ItemResponse {
 impl From<ReconciliationItemRow> for ItemResponse {
     fn from(r: ReconciliationItemRow) -> Self {
         ItemResponse {
-            discrepancy:      r.actual_amount - r.expected_amount,
+            discrepancy:      r.actual_amount.clone().unwrap_or_else(BigDecimal::zero) - r.expected_amount.clone().unwrap_or_else(BigDecimal::zero),
             id:               r.id,
             run_id:           r.run_id,
             transaction_id:   r.transaction_id,
-            expected_amount:  r.expected_amount,
-            actual_amount:    r.actual_amount,
+            expected_amount:  r.expected_amount.unwrap_or_else(BigDecimal::zero),
+            actual_amount:    r.actual_amount.unwrap_or_else(BigDecimal::zero),
             match_status:     r.match_status,
             discrepancy_type: r.discrepancy_type,
             notes:            r.notes,

@@ -11,7 +11,7 @@ Setup strategy
 
 Environment variables (with defaults for local docker-compose)
 --------------------------------------------------------------
-  API_URL      http://localhost:8080
+    API_URL      http://localhost:8081
   DATABASE_URL postgresql://transitops_app:transitops_secret@localhost:5432/transitops
   ENCRYPTION_KEY 0123456789abcdef...  (64 hex chars)
 """
@@ -29,7 +29,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-API_URL = os.getenv("API_URL", "http://localhost:8080")
+API_URL = os.getenv("API_URL", "http://localhost:8081")
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://transitops_app:transitops_secret@localhost:5432/transitops",

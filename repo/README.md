@@ -40,7 +40,7 @@ docker compose down -v
 
 | Service    | Address                   | Notes                          |
 |------------|---------------------------|--------------------------------|
-| API        | http://localhost:8080     | REST API, all endpoints        |
+| API        | http://localhost:8081     | REST API, all endpoints        |
 | PostgreSQL | localhost:5432            | User `transitops_app`, DB `transitops` |
 
 ---
@@ -58,7 +58,7 @@ Expected output: both `db` and `api` show `running` (or `Up`).
 ### 2. Confirm the API is reachable
 
 ```bash
-curl -s http://localhost:8080/auth/session
+curl -s http://localhost:8081/auth/session
 ```
 
 Expected: `{"error":"..."}` or similar with HTTP 401 — this confirms the API is up.
@@ -66,7 +66,7 @@ Expected: `{"error":"..."}` or similar with HTTP 401 — this confirms the API i
 ### 3. Log in as the seed admin user
 
 ```bash
-curl -s -X POST http://localhost:8080/auth/login \
+curl -s -X POST http://localhost:8081/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"AdminPass123!"}' | jq .
 ```
@@ -84,7 +84,7 @@ Expected response:
 Save the token:
 
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:8080/auth/login \
+TOKEN=$(curl -s -X POST http://localhost:8081/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"AdminPass123!"}' | jq -r .token)
 ```
@@ -92,7 +92,7 @@ TOKEN=$(curl -s -X POST http://localhost:8080/auth/login \
 ### 4. Verify authenticated session
 
 ```bash
-curl -s http://localhost:8080/auth/session \
+curl -s http://localhost:8081/auth/session \
   -H "Authorization: Bearer $TOKEN" | jq .
 ```
 
@@ -101,7 +101,7 @@ Expected: object with `username`, `role`, `session_id`.
 ### 5. Check alerts (core domain)
 
 ```bash
-curl -s http://localhost:8080/alerts \
+curl -s http://localhost:8081/alerts \
   -H "Authorization: Bearer $TOKEN" | jq .
 ```
 
@@ -110,14 +110,14 @@ Expected: JSON array (may be empty on a fresh instance).
 ### 6. Check notifications inbox
 
 ```bash
-curl -s http://localhost:8080/notifications \
+curl -s http://localhost:8081/notifications \
   -H "Authorization: Bearer $TOKEN" | jq .
 ```
 
 ### 7. Check payments transactions
 
 ```bash
-curl -s http://localhost:8080/payments/transactions \
+curl -s http://localhost:8081/payments/transactions \
   -H "Authorization: Bearer $TOKEN" | jq .
 ```
 
@@ -127,12 +127,12 @@ Note: the seed admin has `PaymentsTransactionsRead` but not `Write`. Expect 200.
 
 ```bash
 # Log in as dispatcher
-DISPATCHER_TOKEN=$(curl -s -X POST http://localhost:8080/auth/login \
+DISPATCHER_TOKEN=$(curl -s -X POST http://localhost:8081/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"dispatcher","password":"DispatcherPass123!"}' | jq -r .token)
 
 curl -s -o /dev/null -w "%{http_code}" \
-  http://localhost:8080/audit/logs \
+  http://localhost:8081/audit/logs \
   -H "Authorization: Bearer $DISPATCHER_TOKEN"
 # Expected: 403
 ```
@@ -174,7 +174,7 @@ pip install -r requirements.txt
 ### Run against a non-default API URL
 
 ```bash
-API_URL=http://staging.example.com:8080 ./run_tests.sh api
+API_URL=http://staging.example.com:8081 ./run_tests.sh api
 ```
 
 ### Test suite layout
@@ -206,7 +206,7 @@ All configuration is passed via environment variables (see `docker-compose.yml`)
 | `DATABASE_URL`             | `postgresql://transitops_app:transitops_secret@db:5432/transitops` | PostgreSQL connection string                         |
 | `ENCRYPTION_KEY`           | _(none — required)_                                        | **64 hex characters** (32-byte AES-256-GCM key). Must be exactly 64 hex chars. |
 | `ENCRYPTION_KEY_PREVIOUS`  | _(optional)_                                               | Previous 64-hex key, used during key rotation.                 |
-| `API_URL`                  | `http://localhost:8080`                                    | Used by test scripts only.                                     |
+| `API_URL`                  | `http://localhost:8081`                                    | Used by test scripts only.                                     |
 
 `ENCRYPTION_KEY` must be exactly **64 hexadecimal characters** representing a 32-byte
 AES-256 key.  Generate a secure value with:
@@ -240,7 +240,7 @@ cd frontend
 trunk serve
 ```
 
-The frontend dev server starts at `http://localhost:8081` by default (proxied to API on 8080).
+The frontend dev server starts at `http://localhost:8081` by default (proxied to API on 8081).
 
 ### Production build
 

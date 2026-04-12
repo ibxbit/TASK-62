@@ -3,12 +3,16 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use chrono::Utc;
 use uuid::Uuid;
 
+use bigdecimal::BigDecimal;
+use bigdecimal::Zero;
+
 use crate::auth::middleware::{AuthSession, ReauthGuard};
 use crate::error::AppError;
 use crate::rbac::permissions::Permission;
 use crate::AppState;
 
 use super::engine;
+use bigdecimal::ToPrimitive;
 use super::importer;
 use super::models::{
     ItemResponse, ListItemsQuery, ListRunsQuery, ReconciliationItemRow, ReconciliationRunRow,
@@ -318,9 +322,9 @@ pub async fn start_run(
         "extra_in_statement":  output.extra_in_stmt,
         "duplicates":          output.duplicates,
         "discrepancy_count":   output.discrepancy_count(),
-        "total_expected":      output.total_expected,
-        "total_collected":     output.total_collected,
-        "total_discrepancy":   output.total_collected - output.total_expected,
+        "total_expected":      output.total_expected.clone(),
+        "total_collected":     output.total_collected.clone(),
+        "total_discrepancy":   output.total_collected.to_f64().unwrap_or(0.0) - output.total_expected.to_f64().unwrap_or(0.0),
         "is_high_discrepancy": output.is_high_discrepancy(output.items.len()),
     })))
 }
@@ -336,22 +340,22 @@ pub async fn list_runs(
     let limit  = query.limit.unwrap_or(50).clamp(1, 100);
     let offset = query.offset.unwrap_or(0).max(0);
 
-    let rows = sqlx::query_as!(
-        ReconciliationRunRow,
-        r#"
-        SELECT id, run_date, status, statement_import_id,
-               total_expected::double precision, total_collected::double precision, discrepancy_count,
-               started_at, completed_at, run_by, notes,
-               created_at, updated_at
-        FROM payments.reconciliation_runs
-        WHERE ($1::text IS NULL OR status = $1)
-        ORDER BY run_date DESC
-        LIMIT $2 OFFSET $3
-        "#,
-        query.status.as_deref(),
-        limit,
-        offset,
-    )
+    let rows: Vec<ReconciliationRunRow> = sqlx::query_as!(
+         ReconciliationRunRow,
+         r#"
+         SELECT id, run_date, status, statement_import_id,
+             total_expected::numeric, total_collected::numeric, discrepancy_count,
+             started_at, completed_at, run_by, notes,
+             created_at, updated_at
+         FROM payments.reconciliation_runs
+         WHERE ($1::text IS NULL OR status = $1)
+         ORDER BY run_date DESC
+         LIMIT $2 OFFSET $3
+         "#,
+         query.status.as_deref(),
+         limit,
+         offset,
+        )
     .fetch_all(&state.db)
     .await?;
 
@@ -369,19 +373,19 @@ pub async fn get_run(
     let id = *path;
 
     let row = sqlx::query_as!(
-        ReconciliationRunRow,
-        r#"
-        SELECT id, run_date, status, statement_import_id,
-               total_expected::double precision, total_collected::double precision, discrepancy_count,
-               started_at, completed_at, run_by, notes,
-               created_at, updated_at
-        FROM payments.reconciliation_runs WHERE id = $1
-        "#,
-        id,
-    )
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or_else(|| AppError::NotFound("Reconciliation run not found".to_string()))?;
+         ReconciliationRunRow,
+         r#"
+         SELECT id, run_date, status, statement_import_id,
+             total_expected::numeric, total_collected::numeric, discrepancy_count,
+             started_at, completed_at, run_by, notes,
+             created_at, updated_at
+         FROM payments.reconciliation_runs WHERE id = $1
+         "#,
+         id,
+        )
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Reconciliation run not found".to_string()))?;
 
     Ok(HttpResponse::Ok().json(RunResponse::from(row)))
 }
@@ -402,23 +406,23 @@ pub async fn list_items(
     let limit  = query.limit.unwrap_or(100).clamp(1, 500);
     let offset = query.offset.unwrap_or(0).max(0);
 
-    let rows = sqlx::query_as!(
-        ReconciliationItemRow,
-        r#"
-        SELECT id, run_id, transaction_id,
-               expected_amount::double precision, actual_amount::double precision,
-               match_status, discrepancy_type, notes, created_at
-        FROM payments.reconciliation_items
-        WHERE run_id = $1
-          AND ($2::text IS NULL OR discrepancy_type = $2)
-        ORDER BY created_at
-        LIMIT $3 OFFSET $4
-        "#,
-        run_id,
-        query.discrepancy_type.as_deref(),
-        limit,
-        offset,
-    )
+    let rows: Vec<ReconciliationItemRow> = sqlx::query_as!(
+                ReconciliationItemRow,
+                r#"
+                SELECT id, run_id, transaction_id,
+                             expected_amount::numeric, actual_amount::numeric,
+                             match_status, discrepancy_type, notes, created_at
+                FROM payments.reconciliation_items
+                WHERE run_id = $1
+                    AND ($2::text IS NULL OR discrepancy_type = $2)
+                ORDER BY created_at
+                LIMIT $3 OFFSET $4
+                "#,
+                run_id,
+                query.discrepancy_type.as_deref(),
+                limit,
+                offset,
+        )
     .fetch_all(&state.db)
     .await?;
 
@@ -475,9 +479,9 @@ pub async fn run_summary(
 
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "run_id":            run_id,
-        "total_expected":    run.total_expected,
-        "total_collected":   run.total_collected,
-        "total_discrepancy": run.total_collected - run.total_expected,
+        "total_expected":    run.total_expected.clone(),
+        "total_collected":   run.total_collected.clone(),
+        "total_discrepancy": run.total_collected.as_ref().and_then(|v| v.to_f64()).unwrap_or(0.0) - run.total_expected.as_ref().and_then(|v| v.to_f64()).unwrap_or(0.0),
         "discrepancy_count": run.discrepancy_count,
         "amount_tolerance":  AMOUNT_TOLERANCE,
         "by_type":           by_type,

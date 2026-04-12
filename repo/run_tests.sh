@@ -10,7 +10,7 @@
 #
 # Environment variables
 # ---------------------
-#   API_URL        Base URL for the API  (default: http://localhost:8080)
+#   API_URL        Base URL for the API  (default: http://localhost:8081)
 #   DATABASE_URL   PostgreSQL DSN        (default: postgresql://transitops_app:transitops_secret@localhost:5432/transitops)
 #   ENCRYPTION_KEY 64-char hex key       (default: all-zeros dev key)
 #
@@ -40,7 +40,7 @@ RUN_UNIT=true
 RUN_API=true
 CHECK_DEPS=true
 
-export API_URL="${API_URL:-http://localhost:8080}"
+export API_URL="${API_URL:-http://localhost:8081}"
 export DATABASE_URL="${DATABASE_URL:-postgresql://transitops_app:transitops_secret@localhost:5432/transitops}"
 export ENCRYPTION_KEY="${ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}"
 

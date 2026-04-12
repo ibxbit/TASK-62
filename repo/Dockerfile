@@ -53,7 +53,7 @@ ENV DB_USER=transitops_app \
     DB_NAME=transitops \
     ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
     SERVER_HOST=0.0.0.0 \
-    SERVER_PORT=8080
+    SERVER_PORT=8081
 
 # ── Start temporary PostgreSQL, run schema/migrations, compile ─────────────────
 RUN set -eux; \
@@ -114,9 +114,9 @@ COPY --from=builder /app/target/release/transitops-backend ./transitops-backend
 # Copy database files so health-check/migration tooling can access them if needed
 COPY --from=builder /app/db ./db
 
-EXPOSE 8080
+EXPOSE 8081
 
 ENV SERVER_HOST=0.0.0.0
-ENV SERVER_PORT=8080
+ENV SERVER_PORT=8081
 
 ENTRYPOINT ["./transitops-backend"]

@@ -1,3 +1,4 @@
+use actix_web::HttpMessage;
 /// `ScopeGuard` — Actix-web Transform middleware for scope-level permission enforcement.
 ///
 /// Validates the Bearer token AND checks a single required `Permission` before

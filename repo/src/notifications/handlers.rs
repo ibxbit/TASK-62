@@ -657,12 +657,10 @@ pub async fn announce(
     );
 
     // Immediate fan-out (bus will skip this event on its next poll since processed_at is set)
-    let processed = bus::process_pending_events(&state.db).await.unwrap_or(0);
-
+    // Immediate fan-out is handled by the background job scheduler.
     Ok(HttpResponse::Ok().json(json!({
-        "event_id":         event_id,
-        "events_processed": processed,
-        "message":          "Announcement broadcast",
+        "event_id": event_id,
+        "message":  "Announcement broadcast queued for delivery",
     })))
 }
 

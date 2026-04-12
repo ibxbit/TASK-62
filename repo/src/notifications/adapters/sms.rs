@@ -8,7 +8,7 @@
 /// | Env var           | Description                                         |
 /// |-------------------|-----------------------------------------------------|
 /// | `SMS_GATEWAY_URL` | HTTP endpoint of the on-prem gateway, e.g.          |
-/// |                   | `http://sms-gw.internal:8080/send`                  |
+/// |                   | `http://sms-gw.internal:8081/send`                  |
 ///
 /// ## Wire format
 ///

@@ -11,7 +11,10 @@
 ///   4. `POST /payments/imports/{id}/process` triggers `process_import_file`.
 ///   5. Each line is parsed, stored in `statement_import_lines`, and matched
 ///      against `payments.transactions` by `idempotency_key` or amount+date.
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
+use bigdecimal::BigDecimal;
+use bigdecimal::ToPrimitive;
+use std::str::FromStr;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -24,7 +27,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone)]
 pub struct ImportLine {
     pub transaction_ref: Option<String>,
-    pub amount:          f64,
+    pub amount:          BigDecimal,
     pub transaction_date: NaiveDate,
     pub description:     Option<String>,
 }
@@ -77,7 +80,7 @@ pub fn parse_csv(content: &[u8]) -> Result<Vec<ImportLine>, String> {
 
         let get = |idx: usize| record.get(idx).unwrap_or("").trim().to_string();
 
-        let amount = match get(amt_col).replace(',', "").parse::<f64>() {
+        let amount = match BigDecimal::from_str(&get(amt_col).replace(',', "")) {
             Ok(a)  => a,
             Err(_) => {
                 tracing::warn!(row = row_idx + 2, "Invalid amount, skipping row");
@@ -115,7 +118,7 @@ pub fn parse_csv(content: &[u8]) -> Result<Vec<ImportLine>, String> {
 struct JsonImportLine {
     #[serde(rename = "ref", alias = "reference", alias = "transaction_ref")]
     transaction_ref:  Option<String>,
-    amount:           f64,
+    amount:           BigDecimal,
     #[serde(alias = "transaction_date", alias = "date")]
     date:             String,
     description:      Option<String>,
@@ -138,9 +141,16 @@ pub fn parse_json(content: &[u8]) -> Result<Vec<ImportLine>, String> {
             .or_else(|_| NaiveDate::parse_from_str(&item.date, "%d/%m/%Y"))
             .map_err(|_| format!("row {}: invalid date '{}'", i + 1, item.date))?;
 
+        let amount = match BigDecimal::from_str(&item.amount.to_string()) {
+            Ok(a) => a,
+            Err(_) => {
+                tracing::warn!(row = i + 1, "Invalid amount, skipping row");
+                continue;
+            }
+        };
         lines.push(ImportLine {
             transaction_ref:  item.transaction_ref,
-            amount:           item.amount,
+            amount,
             transaction_date,
             description:      item.description,
         });
@@ -180,7 +190,7 @@ pub async fn process_import_file(
 
         // Attempt to match by transaction_ref → idempotency_key
         let matched_id: Option<Uuid> = if let Some(ref txn_ref) = line.transaction_ref {
-            sqlx::query_scalar!(
+            let matched_id: Option<Uuid> = sqlx::query_scalar!(
                 "SELECT id FROM payments.transactions WHERE idempotency_key = $1 LIMIT 1",
                 txn_ref,
             )
@@ -200,18 +210,18 @@ pub async fn process_import_file(
                 .map(|dt| chrono::DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc));
 
             if let (Some(start), Some(end)) = (day_start, day_end) {
-                sqlx::query_scalar!(
-                    r#"
-                    SELECT id FROM payments.transactions
-                    WHERE amount    = $1
-                      AND created_at BETWEEN $2 AND $3
-                      AND status    = 'completed'
-                    LIMIT 1
-                    "#,
-                    line.amount as f64,
-                    start,
-                    end,
-                )
+                let matched_id: Option<Uuid> = sqlx::query_scalar!(
+                                        r#"
+                                        SELECT id FROM payments.transactions
+                                        WHERE amount    = $1
+                                            AND created_at BETWEEN $2 AND $3
+                                            AND status    = 'completed'
+                                        LIMIT 1
+                                        "#,
+                                        line.amount.clone(),
+                                        start,
+                                        end,
+                                )
                 .fetch_optional(pool)
                 .await
                 .ok()
