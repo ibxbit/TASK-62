@@ -138,11 +138,13 @@ async fn append(
         INSERT INTO audit.audit_logs
             (actor_id, actor_username, actor_role, session_id,
              action, domain, entity_type, entity_id,
-             before_state, after_state, ip_address, user_agent, metadata)
+             before_state, after_state, ip_address, user_agent, metadata,
+             retention_until)
         VALUES
             ($1, $2, $3, $4,
              $5, $6, $7, $8,
-             $9, $10, $11::inet, $12, $13)
+             $9, $10, $11::inet, $12, $13,
+             (CURRENT_DATE + INTERVAL '7 years')::date)
         "#,
     )
     .bind(actor_id)
