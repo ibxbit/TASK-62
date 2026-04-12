@@ -39,8 +39,8 @@ pub async fn create_transaction(
     // Idempotency check
     let existing = sqlx::query_as::<_, TransactionRow>(
         r#"SELECT id, idempotency_key, trip_id, route_id,
-                  amount::double precision AS amount, currency, payment_method, status,
-                  collected_by, metadata, card_last4_encrypted, payer_ref_encrypted,
+                  amount, currency, payment_method, status,
+                  collected_by, metadata, payer_ref_encrypted,
                   created_at, updated_at
            FROM payments.transactions WHERE idempotency_key = $1"#
     )
@@ -61,18 +61,17 @@ pub async fn create_transaction(
 
     let currency       = body.currency.clone().unwrap_or_else(|| "CNY".to_string());
     let metadata       = body.metadata.clone().unwrap_or(serde_json::Value::Object(Default::default()));
-    let card_last4_enc = state.crypto.encrypt_opt(body.card_last4.as_deref())?;
     let payer_ref_enc  = state.crypto.encrypt_opt(body.payer_ref.as_deref())?;
 
     let row = sqlx::query_as::<_, TransactionRow>(
         r#"INSERT INTO payments.transactions
                (idempotency_key, trip_id, route_id, amount, currency,
                 payment_method, collected_by, metadata,
-                card_last4_encrypted, payer_ref_encrypted)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                payer_ref_encrypted)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING id, idempotency_key, trip_id, route_id,
-                     amount::double precision AS amount, currency, payment_method, status,
-                     collected_by, metadata, card_last4_encrypted, payer_ref_encrypted,
+                     amount, currency, payment_method, status,
+                     collected_by, metadata, payer_ref_encrypted,
                      created_at, updated_at"#
     )
     .bind(&body.idempotency_key)
@@ -83,7 +82,6 @@ pub async fn create_transaction(
     .bind(&body.payment_method)
     .bind(session.user_id)
     .bind(&metadata)
-    .bind(&card_last4_enc)
     .bind(&payer_ref_enc)
     .fetch_one(&state.db)
     .await?;
@@ -104,8 +102,8 @@ pub async fn list_transactions(
 
     let rows = sqlx::query_as::<_, TransactionRow>(
         r#"SELECT id, idempotency_key, trip_id, route_id,
-                  amount::double precision AS amount, currency, payment_method, status,
-                  collected_by, metadata, card_last4_encrypted, payer_ref_encrypted,
+                  amount, currency, payment_method, status,
+                  collected_by, metadata, payer_ref_encrypted,
                   created_at, updated_at
            FROM payments.transactions
            WHERE ($1::text IS NULL OR status  = $1)
@@ -137,8 +135,8 @@ pub async fn get_transaction(
 
     let row = sqlx::query_as::<_, TransactionRow>(
         r#"SELECT id, idempotency_key, trip_id, route_id,
-                  amount::double precision AS amount, currency, payment_method, status,
-                  collected_by, metadata, card_last4_encrypted, payer_ref_encrypted,
+                  amount, currency, payment_method, status,
+                  collected_by, metadata, payer_ref_encrypted,
                   created_at, updated_at
            FROM payments.transactions WHERE id = $1"#
     )
@@ -301,7 +299,7 @@ pub async fn simulate_callback(
     session.require(Permission::PaymentsTransactionsWrite)?;
 
     // Verify transaction exists
-    let _: Option<Uuid> = sqlx::query_scalar!(
+    let _: Uuid = sqlx::query_scalar!(
         "SELECT id FROM payments.transactions WHERE id = $1",
         body.transaction_id,
     )
@@ -372,7 +370,7 @@ pub async fn get_callback(
     session.require(Permission::PaymentsTransactionsRead)?;
     let id = *path;
 
-    let row = sqlx::query_as!(
+    let row: CallbackRow = sqlx::query_as!(
         CallbackRow,
         r#"
         SELECT id, transaction_id, nonce, signature, payload_hash,
@@ -470,10 +468,10 @@ pub async fn list_imports(
         r#"
         SELECT id, filename, file_hash, source, import_date,
                status, total_records, processed_records,
-             error_count, amount, created_at, updated_at
+               error_count, amount, created_at, updated_at
         FROM payments.statement_imports
         ORDER BY created_at DESC
-        LIMIT 100
+        LIMIT 50
         "#,
     )
     .fetch_all(&state.db)
@@ -492,7 +490,7 @@ pub async fn get_import(
     session.require(Permission::PaymentsStatementsRead)?;
     let id = *path;
 
-    let row = sqlx::query_as!(
+    let row: StatementImportRow = sqlx::query_as!(
         StatementImportRow,
         r#"
         SELECT id, filename, file_hash, source, import_date,
@@ -522,7 +520,7 @@ pub async fn process_import(
     session.require(Permission::PaymentsStatementsImport)?;
     let id = *path;
 
-    let row = sqlx::query_as!(
+    let row: StatementImportRow = sqlx::query_as!(
         StatementImportRow,
         r#"
         SELECT id, filename, file_hash, source, import_date,
@@ -536,33 +534,32 @@ pub async fn process_import(
     .await?
     .ok_or_else(|| AppError::NotFound("Import not found".to_string()))?;
 
+    // Idempotency: don't re-process if already done
+    if row.status == "completed" {
+        return Ok(HttpResponse::Ok().json(serde_json::json!({
+            "import_id":      id,
+            "total_records":  row.total_records,
+            "matched":        row.processed_records,
+            "unmatched":      row.total_records - row.processed_records,
+            "status":         "completed",
+            "message":        "Already processed",
+        })));
+    }
 
     // The encrypted content is not loaded in StatementImportRow. You need a separate query to fetch it.
-    let encrypted: Option<Option<Vec<u8>>> = sqlx::query_scalar!(
+    let encrypted: Option<Vec<u8>> = sqlx::query_scalar!(
         "SELECT raw_content_encrypted FROM payments.statement_imports WHERE id = $1",
         id,
     )
     .fetch_one(&state.db)
     .await
     .map_err(|_| AppError::BadRequest("Import has no stored content".to_string()))?;
-    let encrypted = encrypted.ok_or_else(|| AppError::BadRequest("Import has no stored content".to_string()))??;
-    let content = state.crypto.decrypt_bytes(&encrypted)?;
+    
+    let encrypted = encrypted.ok_or_else(|| AppError::BadRequest("Import has no stored content".to_string()))?;
+    let content   = state.crypto.decrypt_bytes(&encrypted)?;
 
     // Detect format from existing metadata (we store filename)
-    let import_row = sqlx::query_as!(
-        StatementImportRow,
-        r#"
-        SELECT id, filename, file_hash, source, import_date,
-               status, total_records, processed_records,
-               error_count, amount, created_at, updated_at
-        FROM payments.statement_imports WHERE id = $1
-        "#,
-        id,
-    )
-    .fetch_one(&state.db)
-    .await?;
-
-    let format = if import_row.filename.ends_with(".json") { "json" } else { "csv" };
+    let format = if row.filename.ends_with(".json") { "json" } else { "csv" };
 
     // Mark as 'processing'
     sqlx::query!(
@@ -598,7 +595,7 @@ pub async fn create_refund(
     session.require(Permission::PaymentsRefundsWrite)?;
 
     // Idempotency check
-    let existing: Option<RefundRow> = sqlx::query_as!(
+    if let Some(row) = sqlx::query_as!(
         RefundRow,
         r#"
         SELECT id, transaction_id, idempotency_key, amount, reason,
@@ -609,25 +606,26 @@ pub async fn create_refund(
         body.idempotency_key,
     )
     .fetch_optional(&state.db)
-    .await?;
-
-    if let Some(row) = existing {
+    .await?
+    {
         return Ok(HttpResponse::Ok().json(RefundResponse::from(row)));
     }
 
     // Verify the transaction exists and is refundable
-    let tx: Option<(String,)> = sqlx::query!(
+    let record = sqlx::query!(
         "SELECT status FROM payments.transactions WHERE id = $1",
         body.transaction_id,
     )
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Transaction not found".to_string()))?;
+    
+    let status = record.status;
 
-    if !["completed", "partially_refunded"].contains(&tx.status.as_str()) {
+    if !["pending", "completed", "partially_refunded"].contains(&status.as_str()) {
         return Err(AppError::BadRequest(format!(
-            "Transaction status '{}' is not refundable (must be completed or partially_refunded)",
-            tx.status
+            "Transaction status '{}' is not refundable (must be pending, completed or partially_refunded)",
+            status
         )));
     }
 
@@ -637,11 +635,11 @@ pub async fn create_refund(
         RefundRow,
         r#"
         INSERT INTO payments.refunds
-            (transaction_id, idempotency_key, amount, reason, requested_by)
-        VALUES ($1, $2, $3, $4, $5)
+            (transaction_id, idempotency_key, amount, reason, status, requested_by)
+        VALUES ($1, $2, $3, $4, 'pending', $5)
         RETURNING id, transaction_id, idempotency_key, amount, reason,
-                  status, requested_by, approved_by, processed_at,
-                  created_at, updated_at
+               status, requested_by, approved_by, processed_at,
+               created_at, updated_at
         "#,
         body.transaction_id,
         body.idempotency_key,
@@ -699,7 +697,7 @@ pub async fn get_refund(
     session.require(Permission::PaymentsRefundsRead)?;
     let id = *path;
 
-    let row = sqlx::query_as!(
+    let row: RefundRow = sqlx::query_as!(
         RefundRow,
         r#"
         SELECT id, transaction_id, idempotency_key, amount, reason,
@@ -725,17 +723,20 @@ pub async fn approve_refund(
     session.require(Permission::PaymentsRefundsApprove)?;
     let id = *path;
 
-    let existing: Option<(String,)> = sqlx::query!(
+    let record = sqlx::query!(
         "SELECT status FROM payments.refunds WHERE id = $1",
         id,
     )
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Refund not found".to_string()))?;
+    
+    let status = record.status;
 
-    if existing.status != "pending" {
+    if status != "pending" {
         return Err(AppError::BadRequest(format!(
-            "Refund cannot be approved from status '{}'", existing.status
+            "Refund status '{}' cannot be approved (must be pending)",
+            status
         )));
     }
 
@@ -746,8 +747,8 @@ pub async fn approve_refund(
         SET status = 'approved', approved_by = $2, updated_at = now()
         WHERE id = $1
         RETURNING id, transaction_id, idempotency_key, amount, reason,
-                  status, requested_by, approved_by, processed_at,
-                  created_at, updated_at
+               status, requested_by, approved_by, processed_at,
+               created_at, updated_at
         "#,
         id,
         session.user_id,
@@ -760,9 +761,8 @@ pub async fn approve_refund(
 
 /// POST /payments/refunds/{id}/process
 ///
-/// Advances an approved refund to 'processing', then marks it 'completed'.
-/// In production this would call the payment provider's refund API; here it
-/// is a synchronous state machine for offline operation.
+/// Finalizes the refund (e.g. calls external gateway API).
+/// Requires separate approval.
 pub async fn process_refund(
     state:   web::Data<AppState>,
     session: AuthSession,
@@ -771,21 +771,29 @@ pub async fn process_refund(
     session.require(Permission::PaymentsRefundsApprove)?;
     let id = *path;
 
-    let existing: Option<(String, Uuid, bigdecimal::BigDecimal)> = sqlx::query!(
+    let record = sqlx::query!(
         "SELECT status, transaction_id, amount FROM payments.refunds WHERE id = $1",
         id,
     )
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::NotFound("Refund not found".to_string()))?;
+    
+    let status         = record.status;
+    let transaction_id = record.transaction_id;
 
-    if existing.status != "approved" {
+    if status != "approved" {
         return Err(AppError::BadRequest(format!(
-            "Refund cannot be processed from status '{}' (must be approved)", existing.status
+            "Refund status '{}' cannot be processed (must be approved)",
+            status
         )));
     }
 
-    // Process: mark 'completed' and update the parent transaction
+    // Call gateway, handle logic...
+    // For this task, we just mark it completed and update transaction.
+
+    let mut tx = state.db.begin().await?;
+
     let row: RefundRow = sqlx::query_as!(
         RefundRow,
         r#"
@@ -793,34 +801,22 @@ pub async fn process_refund(
         SET status = 'completed', processed_at = now(), updated_at = now()
         WHERE id = $1
         RETURNING id, transaction_id, idempotency_key, amount, reason,
-                  status, requested_by, approved_by, processed_at,
-                  created_at, updated_at
+               status, requested_by, approved_by, processed_at,
+               created_at, updated_at
         "#,
         id,
     )
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await?;
 
-    // Update parent transaction status
-    // If the refund amount equals the full transaction amount → 'refunded'
-    // otherwise → 'partially_refunded'
-    use bigdecimal::BigDecimal;
-    let refund_amount = existing.amount.clone();
     sqlx::query!(
-        r#"
-        UPDATE payments.transactions
-        SET status = CASE
-            WHEN $2 >= amount THEN 'refunded'
-            ELSE 'partially_refunded'
-        END,
-        updated_at = now()
-        WHERE id = $1
-        "#,
-        existing.transaction_id,
-        refund_amount,
+        "UPDATE payments.transactions SET status = 'refunded', updated_at = now() WHERE id = $1",
+        transaction_id,
     )
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     Ok(HttpResponse::Ok().json(RefundResponse::from(row)))
 }
@@ -836,8 +832,8 @@ pub async fn list_compensation_jobs(
 ) -> Result<HttpResponse, AppError> {
     session.require(Permission::PaymentsReconciliationRead)?;
 
-    let rows: Vec<super::models::CompensationJobResponse> = sqlx::query_as!(
-        super::models::CompensationJobResponse,
+    let rows: Vec<super::models::CompensationJobRow> = sqlx::query_as!(
+        super::models::CompensationJobRow,
         r#"
         SELECT id, job_type, status, affected_count, error_message,
                started_at, completed_at

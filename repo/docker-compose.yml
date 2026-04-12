@@ -1,5 +1,4 @@
 
-version: '3.8'
 
 services:
   # ── Test Runner ──────────────────────────────────────────────────────────
@@ -8,13 +7,16 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      api:
+        condition: service_started
     volumes:
       - .:/workspace
     working_dir: /workspace
     environment:
       DATABASE_URL: postgres://transitops_app:transitops_secret@db:5432/transitops
       ENCRYPTION_KEY: 6befdbda636469a7c848628e9b461069143c2ba97afae89b88947814ce123ec3
-    entrypoint: ["/bin/bash", "-c", "pip install --default-timeout=120 -r requirements.txt && chmod +x run_tests.sh && ./run_tests.sh"]
+      API_URL: "http://api:8081"
+    entrypoint: ["/bin/bash", "-c", "apt-get update && apt-get install -y curl && pip install --default-timeout=120 -r requirements.txt && chmod +x run_tests.sh && ./run_tests.sh"]
 
   # ── PostgreSQL 16 ──────────────────────────────────────────────────────────
   db:
@@ -26,11 +28,9 @@ services:
       POSTGRES_USER:     transitops_app
       POSTGRES_PASSWORD: transitops_secret
       POSTGRES_DB:       transitops
-    ports:
-      - "5432:5432"
     volumes:
       # Persistent data volume — survives container restarts
-      - db_data:/var/lib/postgresql/data
+      - transitops_db_data:/var/lib/postgresql/data
       # Initialisation script (runs once on first start — skipped if data volume exists)
       - ./db/init/00_init.sh:/docker-entrypoint-initdb.d/00_init.sh:ro
       # SQL files mounted for the init script to reference
@@ -48,8 +48,6 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    ports:
-      - "8081:8080"
     environment:
       DATABASE_URL:   postgres://transitops_app:transitops_secret@db:5432/transitops
       # 64-hex-character (32-byte) AES-256 key — CHANGE IN PRODUCTION
@@ -62,5 +60,5 @@ services:
         condition: service_healthy
 
 volumes:
-  db_data:
+  transitops_db_data:
     driver: local

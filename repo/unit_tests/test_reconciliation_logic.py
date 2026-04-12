@@ -42,7 +42,8 @@ def is_duplicate(idx: int, dup_map: dict[str, list[int]]) -> bool:
 
 
 def classify_amounts(expected: float, actual: float) -> str:
-    if abs(expected - actual) <= AMOUNT_TOLERANCE:
+    # Use a small epsilon to handle floating point precision
+    if abs(expected - actual) <= AMOUNT_TOLERANCE + 1e-9:
         return "matched"
     return "amount_mismatch"
 

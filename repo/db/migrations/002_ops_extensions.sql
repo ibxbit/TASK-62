@@ -19,19 +19,6 @@ ALTER TABLE ops.routes
     ADD COLUMN IF NOT EXISTS effective_from  TIMESTAMPTZ;
 
 -- ---------------------------------------------------------------------------
--- 2. Extend ops.trips status to include 'scheduled'
--- ---------------------------------------------------------------------------
-ALTER TABLE ops.trips DROP CONSTRAINT IF EXISTS trips_status_check;
-ALTER TABLE ops.trips
-    ADD CONSTRAINT trips_status_check
-    CHECK (status IN ('scheduled','in_progress','completed','cancelled','draft','published'));
-
-ALTER TABLE ops.trips
-    ADD COLUMN IF NOT EXISTS entity_version  INTEGER     NOT NULL DEFAULT 1,
-    ADD COLUMN IF NOT EXISTS effective_from  TIMESTAMPTZ,
-    ADD COLUMN IF NOT EXISTS calendar_id     UUID        REFERENCES ops.trip_calendars(id) ON DELETE SET NULL;
-
--- ---------------------------------------------------------------------------
 -- 3. Trip calendars — defines the days a trip pattern operates
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS ops.trip_calendars (
@@ -53,6 +40,19 @@ CREATE TABLE IF NOT EXISTS ops.trip_calendars (
 
 CREATE INDEX IF NOT EXISTS idx_calendars_valid_range
     ON ops.trip_calendars(valid_from, valid_to) WHERE deleted_at IS NULL;
+
+-- ---------------------------------------------------------------------------
+-- 2. Extend ops.trips status to include 'scheduled'
+-- ---------------------------------------------------------------------------
+ALTER TABLE ops.trips DROP CONSTRAINT IF EXISTS trips_status_check;
+ALTER TABLE ops.trips
+    ADD CONSTRAINT trips_status_check
+    CHECK (status IN ('scheduled','in_progress','completed','cancelled','draft','published'));
+
+ALTER TABLE ops.trips
+    ADD COLUMN IF NOT EXISTS entity_version  INTEGER     NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS effective_from  TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS calendar_id     UUID        REFERENCES ops.trip_calendars(id) ON DELETE SET NULL;
 
 -- ---------------------------------------------------------------------------
 -- 4. Depots — physical locations used to scope gradual rollouts

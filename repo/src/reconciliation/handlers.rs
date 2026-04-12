@@ -252,10 +252,7 @@ pub async fn start_run(
     .await?
     .ok_or_else(|| AppError::NotFound("Statement import not found".to_string()))?;
 
-    // Help compiler infer types for the record
-    let status: String = import.status;
-    let _hash: String  = import.file_hash;
-    let _enc: Option<Vec<u8>> = import.raw_content_encrypted;
+    let status = &import.status;
 
     if status == "failed" {
         return Err(AppError::BadRequest(
@@ -263,22 +260,22 @@ pub async fn start_run(
         ));
     }
 
-    // ---- Optional fingerprint re-verification ----
-    if let Some(ref expected) = body.expected_fingerprint {
+    // Verify file integrity
+    if let Some(expected) = body.expected_fingerprint.as_ref() {
         if &import.file_hash != expected {
-            return Err(AppError::BadRequest(format!(
-                "Fingerprint mismatch — file hash is {}, expected {}",
-                import.file_hash, expected
-            )));
+            return Err(AppError::BadRequest("Statement hash mismatch".to_string()));
         }
     }
 
-    // ---- Re-parse the stored content ----
+    // Decrypt if necessary
     let raw_encrypted = import.raw_content_encrypted
-        .ok_or_else(|| AppError::BadRequest("Import has no stored content".to_string()))?;
-    let raw = state.crypto.decrypt_bytes(&raw_encrypted)?;
+        .as_ref()
+        .ok_or_else(|| AppError::BadRequest("No statement content to process".to_string()))?;
 
-    let parse = importer::validate_and_parse(&raw);
+    let raw_content = state.crypto.decrypt_bytes(raw_encrypted)
+        .map_err(|_| AppError::Internal("Failed to decrypt statement".to_string()))?;
+
+    let parse = importer::validate_and_parse(&raw_content);
     if !parse.is_valid {
         return Err(AppError::BadRequest(format!(
             "Statement has {} format error(s): {}",
@@ -349,7 +346,7 @@ pub async fn list_runs(
          ReconciliationRunRow,
          r#"
          SELECT id, run_date, status, statement_import_id,
-             total_expected::numeric, total_collected::numeric, discrepancy_count,
+             total_expected::numeric as "total_expected!", total_collected::numeric as "total_collected!", discrepancy_count,
              started_at, completed_at, run_by, notes,
              created_at, updated_at
          FROM payments.reconciliation_runs
@@ -377,11 +374,11 @@ pub async fn get_run(
     session.require(Permission::PaymentsReconciliationRead)?;
     let id = *path;
 
-    let row: Option<ReconciliationRunRow> = sqlx::query_as!(
+    let row: ReconciliationRunRow = sqlx::query_as!(
          ReconciliationRunRow,
          r#"
          SELECT id, run_date, status, statement_import_id,
-             total_expected::numeric, total_collected::numeric, discrepancy_count,
+             total_expected::numeric as "total_expected!", total_collected::numeric as "total_collected!", discrepancy_count,
              started_at, completed_at, run_by, notes,
              created_at, updated_at
          FROM payments.reconciliation_runs WHERE id = $1
@@ -415,7 +412,7 @@ pub async fn list_items(
                 ReconciliationItemRow,
                 r#"
                 SELECT id, run_id, transaction_id,
-                             expected_amount::numeric, actual_amount::numeric,
+                             expected_amount::numeric as "expected_amount!", actual_amount::numeric as "actual_amount!",
                              match_status, discrepancy_type, notes, created_at
                 FROM payments.reconciliation_items
                 WHERE run_id = $1

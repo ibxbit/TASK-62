@@ -66,7 +66,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                     .route(web::post().to(simulate_callback)),
             )
             .service(
-                web::resource("/callbacks/{id}")
+                web::resource("/callbacks/{id:[0-9a-fA-F\\-]{36}}")
                     .route(web::get().to(get_callback)),
             )
             .service(

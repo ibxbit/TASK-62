@@ -823,14 +823,16 @@ pub async fn upsert_channel_pref(
 
     let enabled = body.enabled.unwrap_or(true);
 
+    // When channel_address is not provided, keep the existing value on conflict.
+    // On insert, use a placeholder if addr is None (only valid if updating).
     let row = sqlx::query_as::<_, ChannelPreferenceResponse>(
         r#"
         INSERT INTO notifications.channel_preferences
             (user_id, channel, enabled, channel_address, updated_at)
-        VALUES ($1, $2, $3, COALESCE($4, ''), now())
+        VALUES ($1, $2, $3, COALESCE($4, 'none'), now())
         ON CONFLICT (user_id, channel) DO UPDATE
             SET enabled         = EXCLUDED.enabled,
-                channel_address = COALESCE($4, channel_preferences.channel_address),
+                channel_address = COALESCE(NULLIF($4, ''), channel_preferences.channel_address),
                 updated_at      = now()
         RETURNING channel, enabled, channel_address, updated_at
         "#,
@@ -864,7 +866,7 @@ pub async fn delete_channel_pref(
         )));
     }
 
-    let affected = sqlx::query(
+    let _affected = sqlx::query(
         "DELETE FROM notifications.channel_preferences \
          WHERE user_id = $1 AND channel = $2",
     )
@@ -873,13 +875,6 @@ pub async fn delete_channel_pref(
     .execute(&state.db)
     .await?
     .rows_affected();
-
-    if affected == 0 {
-        return Err(AppError::BadRequest(format!(
-            "No '{}' channel preference found for this user",
-            channel
-        )));
-    }
 
     Ok(HttpResponse::NoContent().finish())
 }

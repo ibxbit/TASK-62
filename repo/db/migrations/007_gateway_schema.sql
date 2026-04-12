@@ -48,8 +48,8 @@ CREATE TABLE IF NOT EXISTS payments.compensation_jobs (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_comp_jobs_type   ON payments.compensation_jobs (job_type, created_at DESC);
-CREATE INDEX idx_comp_jobs_status ON payments.compensation_jobs (status);
+CREATE INDEX IF NOT EXISTS idx_comp_jobs_type   ON payments.compensation_jobs (job_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_comp_jobs_status ON payments.compensation_jobs (status);
 
 -- ---- Extend payments.transactions ----
 ALTER TABLE payments.transactions

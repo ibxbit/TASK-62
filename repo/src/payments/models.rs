@@ -1,6 +1,23 @@
 use chrono::{DateTime, NaiveDate, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
+
+/// Accept `amount` as either a JSON number or a quoted decimal string (e.g. `"50.00"`).
+fn de_amount_flexible<'de, D>(d: D) -> Result<f64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum NumOrStr {
+        Num(f64),
+        Str(String),
+    }
+    match NumOrStr::deserialize(d)? {
+        NumOrStr::Num(n) => Ok(n),
+        NumOrStr::Str(s) => s.parse::<f64>().map_err(serde::de::Error::custom),
+    }
+}
 
 // ============================================================
 // DB row types
@@ -93,6 +110,7 @@ pub struct CreateTransactionRequest {
     pub idempotency_key:  String,
     pub trip_id:          Option<Uuid>,
     pub route_id:         Option<Uuid>,
+    #[serde(deserialize_with = "de_amount_flexible")]
     pub amount:           f64,
     pub currency:         Option<String>,    // default "CNY"
     pub payment_method:   String,
@@ -149,6 +167,7 @@ pub struct UploadImportRequest {
 pub struct CreateRefundRequest {
     pub transaction_id:  Uuid,
     pub idempotency_key: String,
+    #[serde(deserialize_with = "de_amount_flexible")]
     pub amount:          f64,
     pub reason:          Option<String>,
 }
@@ -304,6 +323,17 @@ impl From<StatementImportRow> for StatementImportResponse {
     }
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct CompensationJobRow {
+    pub id:             Uuid,
+    pub job_type:       String,
+    pub status:         String,
+    pub affected_count: i32,
+    pub error_message:  Option<String>,
+    pub started_at:     DateTime<Utc>,
+    pub completed_at:   Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct CompensationJobResponse {
     pub id:             Uuid,
@@ -315,4 +345,16 @@ pub struct CompensationJobResponse {
     pub completed_at:   Option<DateTime<Utc>>,
 }
 
-// Removed invalid From<CompensationJobRow> for CompensationJobResponse
+impl From<CompensationJobRow> for CompensationJobResponse {
+    fn from(r: CompensationJobRow) -> Self {
+        CompensationJobResponse {
+            id:             r.id,
+            job_type:       r.job_type,
+            status:         r.status,
+            affected_count: r.affected_count,
+            error_message:  r.error_message,
+            started_at:     r.started_at,
+            completed_at:   r.completed_at,
+        }
+    }
+}

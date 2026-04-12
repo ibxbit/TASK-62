@@ -94,7 +94,7 @@ if $CHECK_DEPS; then
         info "Waiting for API at $API_URL ..."
         MAX_WAIT=60
         DEADLINE=$((SECONDS + MAX_WAIT))
-        until curl -sf -o /dev/null -w "%{http_code}" "$API_URL/auth/session" \
+        until curl -s -o /dev/null -w "%{http_code}" "$API_URL/auth/session" \
               2>/dev/null | grep -qE '^(200|401)$'; do
             if [[ $SECONDS -ge $DEADLINE ]]; then
                 error "API at $API_URL did not become ready within ${MAX_WAIT}s."
@@ -139,7 +139,7 @@ if $RUN_API; then
     info " Running API tests   (API_tests/)"
     info " API_URL: $API_URL"
     info "═══════════════════════════════════════════"
-    python3 -m pytest "${PYTEST_COMMON_ARGS[@]}" \
+    PYTHONPATH="$SCRIPT_DIR/API_tests:${PYTHONPATH:-}" python3 -m pytest "${PYTEST_COMMON_ARGS[@]}" --tb=long \
         "$SCRIPT_DIR/API_tests/" \
         || API_EXIT=$?
 

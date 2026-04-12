@@ -25,7 +25,7 @@ ALTER TABLE ops.routes
 -- dimension_keys controls which drill-down dimensions are valid.
 -- tolerance_minutes is used only by on_time_departure_rate.
 -- ============================================================
-CREATE TABLE reporting.metric_definitions (
+CREATE TABLE IF NOT EXISTS reporting.metric_definitions (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     metric_key          TEXT        NOT NULL UNIQUE,
     display_name        TEXT        NOT NULL,
@@ -47,7 +47,7 @@ CREATE TABLE reporting.metric_definitions (
 -- Pre-computed aggregation results keyed by (metric, granularity, period, dimensions).
 -- Avoids re-computing expensive queries on every export.
 -- ============================================================
-CREATE TABLE reporting.metric_snapshots (
+CREATE TABLE IF NOT EXISTS reporting.metric_snapshots (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     metric_id       UUID        NOT NULL REFERENCES reporting.metric_definitions(id) ON DELETE CASCADE,
     granularity     TEXT        NOT NULL CHECK (granularity IN ('hour', 'day', 'week', 'month')),
@@ -64,13 +64,13 @@ CREATE TABLE reporting.metric_snapshots (
     UNIQUE (metric_id, granularity, period_start, route_id, depot_id)
 );
 
-CREATE INDEX idx_metric_snapshots_metric_period
+CREATE INDEX IF NOT EXISTS idx_metric_snapshots_metric_period
     ON reporting.metric_snapshots (metric_id, period_start DESC);
 
 -- ============================================================
 -- reporting.scheduled_reports
 -- ============================================================
-CREATE TABLE reporting.scheduled_reports (
+CREATE TABLE IF NOT EXISTS reporting.scheduled_reports (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     name            TEXT        NOT NULL,
     metric_ids      UUID[]      NOT NULL,
@@ -93,14 +93,14 @@ CREATE TABLE reporting.scheduled_reports (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_scheduled_reports_next_run
+CREATE INDEX IF NOT EXISTS idx_scheduled_reports_next_run
     ON reporting.scheduled_reports (next_run_at)
     WHERE is_active = TRUE;
 
 -- ============================================================
 -- reporting.report_runs
 -- ============================================================
-CREATE TABLE reporting.report_runs (
+CREATE TABLE IF NOT EXISTS reporting.report_runs (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     scheduled_id    UUID        REFERENCES reporting.scheduled_reports(id) ON DELETE SET NULL,
     -- ad-hoc runs leave scheduled_id NULL and carry trigger_user_id
@@ -122,5 +122,5 @@ CREATE TABLE reporting.report_runs (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_report_runs_scheduled ON reporting.report_runs (scheduled_id, created_at DESC);
-CREATE INDEX idx_report_runs_status    ON reporting.report_runs (status) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_report_runs_scheduled ON reporting.report_runs (scheduled_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_report_runs_status    ON reporting.report_runs (status) WHERE status = 'pending';

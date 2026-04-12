@@ -308,7 +308,10 @@ CREATE TABLE payments.transactions (
                                            CHECK (payment_method IN ('cash','card','mobile','bank_transfer','voucher','other')),
     status                  VARCHAR(20)    NOT NULL DEFAULT 'pending'
                                            CHECK (status IN ('pending','completed','failed','refunded','partially_refunded','voided')),
-    collected_by            UUID           REFERENCES auth.users(id),
+    collected_by            UUID           REFERENCES auth.users(id) ON DELETE SET NULL,
+    route_id                UUID           REFERENCES ops.routes(id),
+    metadata                JSONB          NOT NULL DEFAULT '{}',
+    payer_ref_encrypted     BYTEA,
     created_at              TIMESTAMPTZ    NOT NULL DEFAULT now(),
     updated_at              TIMESTAMPTZ    NOT NULL DEFAULT now()
 );
@@ -327,6 +330,7 @@ CREATE TABLE payments.callbacks (
     nonce              VARCHAR(256) NOT NULL UNIQUE,   -- replay-prevention
     signature          TEXT        NOT NULL,           -- HMAC or provider signature
     payload_hash       TEXT        NOT NULL,           -- SHA-256 of raw payload
+    payload            JSONB       NOT NULL DEFAULT '{}',
     source             VARCHAR(64) NOT NULL,           -- provider name
     received_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     processed_at       TIMESTAMPTZ,
@@ -351,8 +355,8 @@ CREATE TABLE payments.refunds (
     reason           TEXT,
     status           VARCHAR(16)   NOT NULL DEFAULT 'pending'
                                    CHECK (status IN ('pending','approved','processing','completed','rejected')),
-    requested_by     UUID          NOT NULL REFERENCES auth.users(id),
-    approved_by      UUID          REFERENCES auth.users(id),
+    requested_by     UUID          NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    approved_by      UUID          REFERENCES auth.users(id) ON DELETE SET NULL,
     processed_at     TIMESTAMPTZ,
     created_at       TIMESTAMPTZ   NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ   NOT NULL DEFAULT now()
@@ -362,6 +366,32 @@ CREATE INDEX idx_refunds_transaction ON payments.refunds(transaction_id);
 CREATE INDEX idx_refunds_status      ON payments.refunds(status);
 
 -- ---------------------------------------------------------------------------
+-- payments.statement_imports
+-- ---------------------------------------------------------------------------
+CREATE TABLE payments.statement_imports (
+    id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    filename              VARCHAR(256) NOT NULL,
+    file_hash             VARCHAR(64)  NOT NULL UNIQUE,  -- SHA-256 of original file
+    source                VARCHAR(128) NOT NULL,          -- bank / provider name
+    import_date           DATE         NOT NULL,
+    status                VARCHAR(16)  NOT NULL DEFAULT 'pending'
+                                       CHECK (status IN ('pending','processing','completed','failed')),
+    total_records         INT          NOT NULL DEFAULT 0,
+    processed_records     INT          NOT NULL DEFAULT 0,
+    error_count           INT          NOT NULL DEFAULT 0,
+    imported_by           UUID         NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    amount                NUMERIC(16,2) NOT NULL DEFAULT 0,
+    raw_content_encrypted BYTEA,                          -- pgp_sym_encrypt of file bytes
+    format_errors         JSONB         NOT NULL DEFAULT '[]',
+    fingerprint_expected  TEXT,
+    created_at            TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    updated_at            TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_stmt_import_date   ON payments.statement_imports(import_date DESC);
+CREATE INDEX idx_stmt_import_status ON payments.statement_imports(status);
+
+-- ---------------------------------------------------------------------------
 -- payments.reconciliation_runs
 -- ---------------------------------------------------------------------------
 CREATE TABLE payments.reconciliation_runs (
@@ -369,6 +399,7 @@ CREATE TABLE payments.reconciliation_runs (
     run_date            DATE          NOT NULL UNIQUE,
     status              VARCHAR(16)   NOT NULL DEFAULT 'pending'
                                       CHECK (status IN ('pending','running','completed','failed')),
+    statement_import_id UUID          REFERENCES payments.statement_imports(id) ON DELETE SET NULL,
     total_expected      NUMERIC(16,2) NOT NULL DEFAULT 0,
     total_collected     NUMERIC(16,2) NOT NULL DEFAULT 0,
     total_discrepancy   NUMERIC(16,2) GENERATED ALWAYS AS (total_collected - total_expected) STORED,
@@ -396,6 +427,7 @@ CREATE TABLE payments.reconciliation_items (
     discrepancy       NUMERIC(14,2) GENERATED ALWAYS AS (actual_amount - expected_amount) STORED,
     match_status      VARCHAR(16)   NOT NULL
                                     CHECK (match_status IN ('matched','discrepancy','missing','extra')),
+    discrepancy_type  VARCHAR(32),
     notes             TEXT,
     created_at        TIMESTAMPTZ   NOT NULL DEFAULT now(),
     UNIQUE (run_id, transaction_id)
@@ -403,29 +435,6 @@ CREATE TABLE payments.reconciliation_items (
 
 CREATE INDEX idx_recon_items_run    ON payments.reconciliation_items(run_id);
 CREATE INDEX idx_recon_items_status ON payments.reconciliation_items(match_status);
-
--- ---------------------------------------------------------------------------
--- payments.statement_imports
--- ---------------------------------------------------------------------------
-CREATE TABLE payments.statement_imports (
-    id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    filename              VARCHAR(256) NOT NULL,
-    file_hash             VARCHAR(64)  NOT NULL UNIQUE,  -- SHA-256 of original file
-    source                VARCHAR(128) NOT NULL,          -- bank / provider name
-    import_date           DATE         NOT NULL,
-    status                VARCHAR(16)  NOT NULL DEFAULT 'pending'
-                                       CHECK (status IN ('pending','processing','completed','failed')),
-    total_records         INT          NOT NULL DEFAULT 0,
-    processed_records     INT          NOT NULL DEFAULT 0,
-    error_count           INT          NOT NULL DEFAULT 0,
-    imported_by           UUID         NOT NULL REFERENCES auth.users(id),
-    raw_content_encrypted BYTEA,                          -- pgp_sym_encrypt of file bytes
-    created_at            TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    updated_at            TIMESTAMPTZ  NOT NULL DEFAULT now()
-);
-
-CREATE INDEX idx_stmt_import_date   ON payments.statement_imports(import_date DESC);
-CREATE INDEX idx_stmt_import_status ON payments.statement_imports(status);
 
 -- ---------------------------------------------------------------------------
 -- payments.statement_import_lines
@@ -486,6 +495,7 @@ CREATE TABLE IF NOT EXISTS payments.gateway_configs (
     ts_header      VARCHAR(64)  NOT NULL DEFAULT 'X-Timestamp',
     ts_in_sig      BOOLEAN      NOT NULL DEFAULT TRUE,
     is_active      BOOLEAN      NOT NULL DEFAULT TRUE,
+    amount         NUMERIC(14,2) NOT NULL DEFAULT 0,
     created_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
@@ -506,6 +516,8 @@ SELECT
 FROM payments.reconciliation_items ri
 JOIN payments.reconciliation_runs rr ON rr.id = ri.run_id
 LEFT JOIN payments.transactions  tx  ON tx.id = ri.transaction_id;
+
+
 
 
 -- =============================================================================
@@ -570,19 +582,87 @@ CREATE INDEX idx_snapshots_type       ON reporting.report_snapshots(report_type)
 CREATE INDEX idx_snapshots_expires_at ON reporting.report_snapshots(expires_at);
 
 -- ---------------------------------------------------------------------------
+-- reporting.scheduled_reports
+-- ---------------------------------------------------------------------------
+CREATE TABLE reporting.scheduled_reports (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            TEXT        NOT NULL,
+    metric_ids      UUID[]      NOT NULL,
+    schedule        TEXT        NOT NULL CHECK (schedule IN ('daily', 'weekly', 'monthly')),
+    route_id        UUID,
+    depot_id        UUID,
+    date_range_days INT         NOT NULL DEFAULT 30,
+    granularity     TEXT        NOT NULL DEFAULT 'day'
+        CHECK (granularity IN ('hour', 'day', 'week', 'month')),
+    output_format   TEXT        NOT NULL DEFAULT 'csv'
+        CHECK (output_format IN ('csv', 'pdf')),
+    recipient_user_ids UUID[]   NOT NULL DEFAULT '{}',
+    is_active       BOOLEAN     NOT NULL DEFAULT TRUE,
+    next_run_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_run_at     TIMESTAMPTZ,
+    created_by      UUID        NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ---------------------------------------------------------------------------
 -- reporting.report_runs  (used by the reporting handlers)
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS reporting.report_runs (
-    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    report_type  VARCHAR(64) NOT NULL,
-    generated_by UUID        NOT NULL REFERENCES auth.users(id),
-    parameters   JSONB       NOT NULL DEFAULT '{}',
-    result_data  JSONB       NOT NULL DEFAULT '{}',
-    value        NUMERIC(24,6),
-    generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at   TIMESTAMPTZ NOT NULL,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+CREATE TABLE reporting.report_runs (
+    id                UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    scheduled_id      UUID          REFERENCES reporting.scheduled_reports(id) ON DELETE SET NULL,
+    trigger_user_id   UUID          REFERENCES auth.users(id),
+    metric_ids        UUID[]        NOT NULL,
+    route_id          UUID,
+    depot_id          UUID,
+    date_from         TIMESTAMPTZ   NOT NULL,
+    date_to           TIMESTAMPTZ   NOT NULL,
+    granularity       VARCHAR(16)   NOT NULL,
+    output_format     VARCHAR(16)   NOT NULL,
+    status            VARCHAR(16)   NOT NULL DEFAULT 'running',
+    started_at        TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    completed_at      TIMESTAMPTZ,
+    result_data       JSONB,
+    value             NUMERIC(24,6),
+    error_message     TEXT,
+    created_at        TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ   NOT NULL DEFAULT now()
 );
+
+-- =============================================================================
+-- SCHEMA: alerting
+-- =============================================================================
+
+CREATE SCHEMA IF NOT EXISTS alerting;
+
+-- ---------------------------------------------------------------------------
+-- alerting.alerts
+-- ---------------------------------------------------------------------------
+CREATE TABLE alerting.alerts (
+    id                 UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    alert_type         VARCHAR(64)   NOT NULL,
+    severity           VARCHAR(16)   NOT NULL CHECK (severity IN ('info', 'warning', 'critical')),
+    status             VARCHAR(16)   NOT NULL DEFAULT 'open'
+                                     CHECK (status IN ('open', 'acknowledged', 'closed')),
+    source_domain      VARCHAR(64)   NOT NULL,
+    source_entity_id   UUID,
+    title              TEXT          NOT NULL,
+    description        TEXT,
+    payload            JSONB         NOT NULL DEFAULT '{}',
+    acknowledged_by    UUID          REFERENCES auth.users(id),
+    acknowledged_at    TIMESTAMPTZ,
+    closed_by          UUID          REFERENCES auth.users(id),
+    closed_at          TIMESTAMPTZ,
+    close_reason       TEXT,
+    created_at         TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ   NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_alerts_status      ON alerting.alerts (status);
+CREATE INDEX idx_alerts_severity    ON alerting.alerts (severity);
+CREATE INDEX idx_alerts_type        ON alerting.alerts (alert_type);
+CREATE INDEX idx_alerts_created_at  ON alerting.alerts (created_at DESC);
+CREATE INDEX idx_alerts_source      ON alerting.alerts (source_domain, source_entity_id);
 
 
 -- =============================================================================
@@ -669,7 +749,7 @@ CREATE INDEX IF NOT EXISTS idx_job_runs_running
 -- SECURITY: Application DB Role (least-privilege)
 -- =============================================================================
 
-GRANT USAGE ON SCHEMA auth, ops, notifications, payments, reporting, audit, scheduler
+GRANT USAGE ON SCHEMA auth, ops, notifications, payments, reporting, alerting, audit, scheduler
     TO transitops_app;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA auth          TO transitops_app;
@@ -677,6 +757,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ops           TO tr
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA notifications TO transitops_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA payments      TO transitops_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA reporting     TO transitops_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA alerting      TO transitops_app;
 GRANT SELECT, INSERT ON audit.audit_logs                                   TO transitops_app;
 GRANT SELECT, INSERT, UPDATE ON scheduler.job_runs                         TO transitops_app;
 
@@ -701,7 +782,7 @@ BEGIN
         SELECT table_schema, table_name
         FROM information_schema.columns
         WHERE column_name = 'updated_at'
-          AND table_schema IN ('auth','ops','notifications','payments','reporting','scheduler')
+          AND table_schema IN ('auth','ops','notifications','payments','reporting','alerting','scheduler')
     LOOP
         EXECUTE format(
             'CREATE TRIGGER trg_set_updated_at

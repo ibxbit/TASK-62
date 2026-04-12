@@ -21,7 +21,7 @@
 
 CREATE SCHEMA IF NOT EXISTS alerting;
 
-CREATE TABLE alerting.alerts (
+CREATE TABLE IF NOT EXISTS alerting.alerts (
     id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
 
     -- Classification
@@ -59,19 +59,19 @@ CREATE TABLE alerting.alerts (
 
 -- Enforce at-most-one open alert per source entity + type.
 -- Partial unique index: only applies when status = 'open' and entity is known.
-CREATE UNIQUE INDEX idx_alerts_open_dedup
+CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_open_dedup
     ON alerting.alerts (alert_type, source_entity_id)
     WHERE status = 'open' AND source_entity_id IS NOT NULL;
 
-CREATE INDEX idx_alerts_status
+CREATE INDEX IF NOT EXISTS idx_alerts_status
     ON alerting.alerts (status, created_at DESC);
 
-CREATE INDEX idx_alerts_severity
+CREATE INDEX IF NOT EXISTS idx_alerts_severity
     ON alerting.alerts (severity, created_at DESC);
 
-CREATE INDEX idx_alerts_type
+CREATE INDEX IF NOT EXISTS idx_alerts_type
     ON alerting.alerts (alert_type, created_at DESC);
 
-CREATE INDEX idx_alerts_entity
+CREATE INDEX IF NOT EXISTS idx_alerts_entity
     ON alerting.alerts (source_entity_id)
     WHERE source_entity_id IS NOT NULL;

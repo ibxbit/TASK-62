@@ -619,7 +619,7 @@ pub async fn list_runs(
 ) -> Result<HttpResponse, AppError> {
     session.require(Permission::ReportingRead)?;
 
-    let rows = sqlx::query_as!(
+    let rows: Vec<super::models::ReportRunRow> = sqlx::query_as!(
                  super::models::ReportRunRow,
                  r#"
                  SELECT id, scheduled_id, trigger_user_id, metric_ids,
@@ -647,7 +647,7 @@ pub async fn get_run(
     session.require(Permission::ReportingRead)?;
     let id = *path;
 
-    let row = sqlx::query_as!(
+    let row: super::models::ReportRunRow = sqlx::query_as!(
                  super::models::ReportRunRow,
                  r#"
                  SELECT id, scheduled_id, trigger_user_id, metric_ids,
@@ -681,7 +681,7 @@ pub async fn export_run(
     session.require(Permission::ReportingExport)?;
     let id = *path;
 
-    let row = sqlx::query_as!(
+    let row: super::models::ReportRunRow = sqlx::query_as!(
          super::models::ReportRunRow,
          r#"
          SELECT id, scheduled_id, trigger_user_id, metric_ids,

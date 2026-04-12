@@ -152,7 +152,7 @@ pub async fn get_alert(
     session.require(Permission::AlertsRead)?;
     let id = *path;
 
-    let row: Option<AlertRow> = sqlx::query_as!(
+    let row: AlertRow = sqlx::query_as!(
         AlertRow,
         r#"
         SELECT id, alert_type, severity, status, source_domain, source_entity_id,

@@ -11,7 +11,7 @@ CREATE SCHEMA IF NOT EXISTS scheduler;
 -- ---------------------------------------------------------------------------
 -- Execution history
 -- ---------------------------------------------------------------------------
-CREATE TABLE scheduler.job_runs (
+CREATE TABLE IF NOT EXISTS scheduler.job_runs (
     id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     job_name     TEXT         NOT NULL,
     -- 'running'  — lock acquired, execution in progress
@@ -28,11 +28,11 @@ CREATE TABLE scheduler.job_runs (
 );
 
 -- per-job history, most-recent-first
-CREATE INDEX idx_job_runs_name_time
+CREATE INDEX IF NOT EXISTS idx_job_runs_name_time
     ON scheduler.job_runs (job_name, started_at DESC);
 
 -- find stale running records on restart
-CREATE INDEX idx_job_runs_running
+CREATE INDEX IF NOT EXISTS idx_job_runs_running
     ON scheduler.job_runs (started_at)
     WHERE status = 'running';
 
