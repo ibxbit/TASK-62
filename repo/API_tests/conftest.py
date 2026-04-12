@@ -122,8 +122,6 @@ def _create_test_users(conn) -> dict[str, uuid.UUID]:
             user_id = uuid.uuid4()
             pw_hash = _ph.hash(spec["password"])
             email_enc = _encrypt_field(spec["email"])
-            name_enc  = _encrypt_field(spec["fullname"])
-
             cur.execute(
                 """
                 SELECT id FROM auth.roles WHERE name = %s
@@ -139,20 +137,19 @@ def _create_test_users(conn) -> dict[str, uuid.UUID]:
             cur.execute(
                 """
                 INSERT INTO auth.users
-                    (id, username, email_encrypted, full_name_encrypted,
+                    (id, username, email_encrypted,
                      password_hash, role_id, is_active)
-                VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+                VALUES (%s, %s, %s, %s, %s, TRUE)
                 ON CONFLICT (username) DO UPDATE
                     SET password_hash       = EXCLUDED.password_hash,
                         email_encrypted     = EXCLUDED.email_encrypted,
-                        full_name_encrypted = EXCLUDED.full_name_encrypted,
                         role_id             = EXCLUDED.role_id,
                         is_active           = TRUE,
                         deleted_at          = NULL,
                         updated_at          = now()
                 RETURNING id
                 """,
-                (str(user_id), spec["username"], email_enc, name_enc, pw_hash, str(role_id)),
+                (str(user_id), spec["username"], email_enc, pw_hash, str(role_id)),
             )
             returned = cur.fetchone()[0]
             user_ids[role_key] = returned
@@ -162,11 +159,26 @@ def _create_test_users(conn) -> dict[str, uuid.UUID]:
 
 
 def _delete_test_users(conn):
-    """Remove test users (and cascade-delete their sessions/deliveries)."""
+    """Deactivate test users to avoid FK teardown failures."""
     usernames = [spec["username"] for spec in TEST_USERS.values()]
     with conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM auth.users WHERE username = ANY(%s)",
+            """
+            DELETE FROM auth.sessions
+            WHERE user_id IN (
+                SELECT id FROM auth.users WHERE username = ANY(%s)
+            )
+            """,
+            (usernames,),
+        )
+        cur.execute(
+            """
+            UPDATE auth.users
+            SET is_active = FALSE,
+                deleted_at = now(),
+                updated_at = now()
+            WHERE username = ANY(%s)
+            """,
             (usernames,),
         )
     conn.commit()
