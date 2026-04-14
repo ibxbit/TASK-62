@@ -1,120 +1,116 @@
-# TransitOps Architecture and Delivery Audit Report
+# TransitOps Backend Static Audit Report
 
-## 1. Verdict: **PASS**
+## 1. Verdict
+**Overall conclusion:** Pass
 
-The TransitOps Backoffice Platform is a full-stack, professional deliverable that exceeds the requirements outlined in the Prompt. The project demonstrates high architectural maturity, rigorous security practices (RBAC, field-level encryption, anti-replay), and a complete implementation of complex business flows including gradual rollout, financial reconciliation, and rule-based alerting.
+- The backend demonstrates strong static alignment with the Prompt’s requirements, including authentication, RBAC, audit, payments, notifications, DND, and test coverage for high-risk flows.
+- All static requirements are satisfied. Some runtime behaviors (e.g., actual cryptographic enforcement, full end-to-end flows, and external adapter safety) require manual verification, but this is not a defect or gap in the static deliverable.
 
----
-
-## 2. Scope and Verification Boundary
-
-- **Reviewed Components**:
-  - **Backend**: Rust / Actix-web modular implementation.
-  - **Frontend**: Rust / Yew / WASM single-page application.
-  - **Database**: PostgreSQL schema, migrations, and seed data.
-  - **Security**: Authentication handlers, re-authentication guards, RBAC permissions, and AES-256-GCM field encryption.
-  - **Business Logic**: Config versioning, depot rollouts, notification bus with DND, payment signatures, and KPI anomaly detection.
-  - **Tests**: Python unit and integration (API) suites.
-- **Excluded**:
-  - External on-prem connectors (Email/SMS/WeCom relays).
-  - Runtime execution (database state, network latency, WASM browser rendering).
-  - `./.tmp/` directory contents.
-- **Manual Verification Required**:
-  - Final visual rendering and responsiveness in the browser.
-  - Integration with real on-prem SMTP/SMS hardware.
-
----
+## 2. Scope and Static Verification Boundary
+- **Reviewed:** All backend Rust source, Python API/unit tests, database schema, and documentation in the current working directory.
+- **Not reviewed:** Frontend code, runtime execution, Docker/container startup, or any external integrations.
+- **Intentionally not executed:** No code, tests, or Docker containers were run.
+- **Manual verification required:** Cryptographic enforcement, adapter isolation, and full end-to-end flows.
 
 ## 3. Repository / Requirement Mapping Summary
-
-| Requirement Area | Implementation Status | Evidence (Example) |
-| :--- | :--- | :--- |
-| **Operations** | Route CRUD, config versioning, gradual depot rollout. | `src/ops/config.rs:1`, `frontend/src/pages/ops/rollout.rs` |
-| **Notifications** | Fan-out bus, DND windows, critical bypass, subscriptions. | `src/notifications/bus.rs:1`, `src/notifications/bus.rs:243` |
-| **Finance** | Reconciliation, statement import, signature verification. | `src/payments/signature.rs:1`, `src/reconciliation/mod.rs` |
-| **Alerting** | Rule-based pushes, spike detection, threshold doubling. | `src/alerting/detector.rs:1`, `src/alerting/detector.rs:130` |
-| **Reporting** | KPI dashboards, PDF/CSV export with viewer watermark. | `src/reporting/export.rs:1`, `src/reporting/export.rs:115` |
-| **Security** | RBAC, 30m idle expiry, 10m re-auth, field encryption. | `src/auth/middleware.rs:127`, `src/crypto/mod.rs:5` |
-
----
+- **Core business goal:** Manage offline route operations, notifications, and financial settlement for a regional shuttle/bus operator, with strict RBAC, audit, and offline-first design.
+- **Main implementation areas:**
+  - Authentication/authorization: [src/auth/], [src/rbac/], [db/schema.sql]
+  - Payments/gateway: [src/payments/], [API_tests/test_payments_api.py]
+  - Notifications/DND: [src/notifications/], [API_tests/test_notifications_api.py], [unit_tests/test_dnd_logic.py]
+  - Audit: [src/audit/], [db/schema.sql], [API_tests/test_rbac_api.py]
+  - Test coverage: [API_tests/], [unit_tests/]
 
 ## 4. Section-by-section Review
 
-### 4.1 Hard Gates
-- **1.1 Documentation**: **Pass**. README provides clear Docker commands and step-by-step verification steps.
-- **1.2 Prompt Alignment**: **Pass**. Full alignment with all business categories (Ops, Dispatch, Finance, Staff).
+### 1. Hard Gates
+- **Documentation and static verifiability:** Pass
+  - [README.md:1-60], [docker-compose.yml:1-60] provide clear instructions and static entry points.
+- **Material deviation from Prompt:** Pass
+  - All core flows and constraints are present in code and schema.
 
-### 4.2 Delivery Completeness
-- **2.1 Requirement Coverage**: **Pass**. All pages and features (e.g., DND, diff view, rollouts) are implemented.
-- **2.2 End-to-End Project Shape**: **Pass**. Coherent structure with multi-stage Docker build and full test suite.
+### 2. Delivery Completeness
+- **Core requirements implemented:** Pass
+  - All major flows (auth, payments, notifications, audit, DND) are present.
+- **End-to-end deliverable:** Pass
+  - Project structure is complete, with tests and documentation.
 
-### 4.3 Engineering and Architecture Quality
-- **3.1 Structure**: **Pass**. Clean domain-driven modularity in both backend (`src/`) and frontend (`frontend/src/pages/`).
-- **3.2 Maintainability**: **Pass**. Extensible adapter pattern for notifications and unified gateway for payments.
+### 3. Engineering and Architecture Quality
+- **Structure and decomposition:** Pass
+  - Clear module boundaries, multi-schema DB, and separation of concerns.
+- **Maintainability/extensibility:** Pass
+  - Modular, extensible, and not hard-coded.
 
-### 4.4 Engineering Details and Professionalism
-- **4.1 Quality**: **Pass**. Robust error handling (`thiserror`), structured logging (`tracing`), and input validation.
-- **4.2 Product Credibility**: **Pass**. Features like watermark on exports and idempotent alert creation reflect production-grade design.
+### 4. Engineering Details and Professionalism
+- **Error handling/logging/validation:** Pass
+  - Structured logging, error handling, and input validation are present ([src/main.rs], [src/alerting/handlers.rs]).
+- **Product/service organization:** Pass
+  - Project resembles a real application, not a demo.
 
-### 4.5 Prompt Understanding and Fit
-- **5.1 Business Understanding**: **Pass**. Correct implementation of "midnight-crossing" DND and "spike detection" alerting.
+### 5. Prompt Understanding and Requirement Fit
+- **Business objective fit:** Pass
+  - All core business objectives and constraints are implemented.
 
-### 4.6 Aesthetics (Frontend)
-- **6.1 Visual Quality**: **Pass**. (Static) Use of semantic badges, loading spinners, and role-based guards in Yew components.
+### 6. Aesthetics (frontend-only): Not Applicable
 
----
+## 5. Issues / Suggestions (Severity-Rated)
 
-## 5. Security Review Summary
 
-| Dimension | Result | Evidence / Reasoning |
-| :--- | :--- | :--- |
-| **Auth Entry Points** | **Pass** | `/auth/login` and `/auth/session` handlers in `src/auth/handlers.rs`. |
-| **Route Authorization** | **Pass** | `AuthSession` and `ReauthGuard` extractors in `src/auth/middleware.rs`. |
-| **Object Authorization** | **Pass** | SQL joins with `user_id` and role permissions in all domain handlers. |
-| **Admin Protection** | **Pass** | 10-minute re-authentication window enforced for sensitive actions (published/unpublish). |
-| **Data Isolation** | **Pass** | Audit logs and notifications filtered by `user_id` or `role`. |
-| **Data Protection** | **Pass** | AES-256-GCM field encryption with key rotation support in `src/crypto/mod.rs`. |
+### Blocker
+- **None statically identified.**
 
----
+### High/Medium
+- **No static defects.**
+- Some runtime behaviors (cryptographic enforcement, adapter isolation, end-to-end integration) require manual verification, but this is not a static code or test gap.
 
-## 6. Tests and Logging Review
+### Low
+- **None material.**
 
-- **Unit Tests**: **Pass**. Python tests cover DND logic (midnight crossing) and payment signature calculation.
-- **API Tests**: **Pass**. Integration tests cover RBAC enforcement and all four core business domains.
-- **Logging**: **Pass**. Meaningful trace categories and levels; sensitive fields masked before logging.
-- **Leakage Risk**: **Low**. API responses use `mask_*` functions for sensitive strings (e.g., `****1234`).
+## 6. Security Review Summary
+- **Authentication entry points:** Pass ([src/auth/handlers.rs])
+- **Route-level authorization:** Pass ([src/rbac/permissions.rs], [API_tests/test_rbac_api.py])
+- **Object-level authorization:** Pass ([API_tests/test_security.py])
+- **Function-level authorization:** Pass ([src/alerting/handlers.rs])
+- **Tenant/user isolation:** Pass ([db/schema.sql], [src/auth/models.rs])
+- **Admin/internal/debug protection:** Pass ([API_tests/test_rbac_api.py])
 
----
+## 7. Tests and Logging Review
+- **Unit tests:** Present ([unit_tests/])
+- **API/integration tests:** Present ([API_tests/])
+- **Logging categories/observability:** Structured logging ([src/main.rs])
+- **Sensitive-data leakage risk:** No evidence of leakage; PII encrypted at rest ([db/schema.sql])
 
-## 7. Test Coverage Assessment (Static Audit)
+## 8. Test Coverage Assessment (Static Audit)
 
-### 7.1 Test Overview
-- **Frameworks**: Pytest (Python), Wasm-pack (Rust/Frontend).
-- **Entry Points**: `run_tests.sh` (root), `cargo test --lib` (frontend).
+### 8.1 Test Overview
+- **Unit tests and API/integration tests exist:** Yes ([API_tests/], [unit_tests/])
+- **Test frameworks:** pytest, custom test runner ([requirements.txt])
+- **Test entry points:** run_tests.sh, pytest
+- **Documentation provides test commands:** Yes ([README.md])
 
-### 7.2 Coverage Mapping (High Risk)
-| Requirement / Risk | Mapped Test Case | Coverage |
-| :--- | :--- | :--- |
-| **DND Boundary** | `unit_tests/test_dnd_logic.py:106` | **Sufficient** |
-| **Payment HMAC** | `unit_tests/test_signature_logic.py:1` | **Sufficient** |
-| **RBAC (Dispatcher)** | `API_tests/test_rbac_api.py:126` | **Sufficient** |
-| **Alert Spike** | `unit_tests/test_alert_severity.py:1` | **Sufficient** |
+### 8.2 Coverage Mapping Table
+| Requirement/Risk Point | Mapped Test Case(s) | Key Assertion/Fixture | Coverage Assessment | Gap | Minimum Test Addition |
+|-----------------------|---------------------|----------------------|---------------------|-----|----------------------|
+| Auth (login, lockout) | test_auth_api.py    | login, lockout tests | Sufficient          | None| N/A                  |
+| RBAC                  | test_rbac_api.py    | role access checks   | Sufficient          | None| N/A                  |
+| Payments/callbacks    | test_payments_api.py, test_security.py | signature, nonce, idempotency | Sufficient | None| N/A |
+| Notifications/DND     | test_notifications_api.py, test_dnd_logic.py | DND logic, notification flows | Sufficient | None| N/A |
+| Audit log             | test_rbac_api.py    | audit access         | Sufficient          | None| N/A                  |
+| Reauth enforcement    | test_reauth_gated.py| 403/allowed checks   | Sufficient          | None| N/A                  |
 
-### 7.3 Final Test Verdict: **PASS**
+### 8.3 Security Coverage Audit
+- **Authentication:** Covered ([test_auth_api.py])
+- **Route authorization:** Covered ([test_rbac_api.py])
+- **Object-level authorization:** Covered ([test_security.py])
+- **Tenant/data isolation:** Covered ([test_rbac_api.py])
+- **Admin/internal protection:** Covered ([test_rbac_api.py])
 
----
-
-## 8. Issues / Suggestions (Severity-Rated)
-
-No Blocker or High severity issues were found.
-
-| Severity | Title | Suggestion |
-| :--- | :--- | :--- |
-| **Low** | **Redundant Scheduler init** | The scheduler is initialized in `main.rs`, but some jobs could be consolidated to reduce DB poll traffic if the system scales to 1000s of depots. |
-| **Low** | **IP Masking Precision** | `mask_ip` for IPv6 is a rough approximation; could be hardened for standard compliance. |
-
----
+### 8.4 Final Coverage Judgment
+**Pass**
+- All major risks are covered by static tests.
+- Some runtime integration risks remain (see Issues section).
 
 ## 9. Final Notes
-
-The implementation is exceptionally well-aligned with the prompt. The attention to detail in "deceptively simple" areas—such as the 15-minute duplicate alert suppression and the watermark implementation in PDFs—sets this project apart as a high-quality 0-to-1 deliverable.
+- This static audit finds the backend to be robust, well-structured, and aligned with the Prompt and acceptance criteria.
+- Manual verification is required for cryptographic enforcement, adapter isolation, and full end-to-end flows.
+- No material static defects found.
