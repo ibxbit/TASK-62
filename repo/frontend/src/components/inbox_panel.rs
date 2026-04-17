@@ -102,8 +102,8 @@ pub fn inbox_panel() -> Html {
         let fetch = fetch.clone();
         let filter = ctx.state.filter.clone();
         let is_open = ctx.state.is_open;
-        use_effect_with((filter, is_open), move |(_, &open)| {
-            if open {
+        use_effect_with((filter, is_open), move |(_, open)| {
+            if *open {
                 fetch.emit(());
             }
         });

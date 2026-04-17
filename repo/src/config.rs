@@ -14,14 +14,15 @@ pub struct Config {
     // ---- External channel adapters (on-prem connectors) ----
     /// HTTP endpoint of the on-prem SMTP relay.
     /// Absent → email adapter inactive; no connections attempted.
+    /// To enable/disable the email adapter, set/unset EMAIL_RELAY_URL in env.
     pub email_relay_url:   Option<String>,
     /// Sender address used in outbound email.
     pub email_from_addr:   String,
     /// HTTP endpoint of the on-prem SMS gateway.
-    /// Absent → SMS adapter inactive.
+    /// Absent → SMS adapter inactive. To enable/disable, set/unset SMS_GATEWAY_URL.
     pub sms_gateway_url:   Option<String>,
     /// WeCom Bot webhook URL (on-prem proxy or direct WeCom endpoint).
-    /// Absent → WeCom adapter inactive.
+    /// Absent → WeCom adapter inactive. To enable/disable, set/unset WECOM_WEBHOOK_URL.
     pub wecom_webhook_url: Option<String>,
 
     // ---- Auth constants (tunable via env; sensible defaults hardcoded) ----

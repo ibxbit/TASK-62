@@ -1,0 +1,9 @@
+# Enforce LF line endings for all shell scripts and config files that are
+# executed inside Linux containers.  Without this, Windows checkouts produce
+# CRLF line endings that break `#!/usr/bin/env bash` shebangs.
+*.sh        text eol=lf
+*.bash      text eol=lf
+Dockerfile* text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.conf      text eol=lf

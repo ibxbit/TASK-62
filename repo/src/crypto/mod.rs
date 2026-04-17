@@ -294,9 +294,13 @@ mod tests {
 
     #[test]
     fn mask_account_number_formats() {
+        // Long IBAN → first 4 + "***" + last 4.
         assert_eq!(mask_account_number("GB29NWBK60161331926819"), "GB29***6819");
-        assert_eq!(mask_account_number("12345678"),               "1234***5678");
-        assert_eq!(mask_account_number("short"),                  "*****");
+        // 9-char minimum for the truncated form (the impl treats n ≤ 8 as too short).
+        assert_eq!(mask_account_number("123456789"), "1234***6789");
+        // n ≤ 8 are fully masked to avoid leaking short account numbers.
+        assert_eq!(mask_account_number("12345678"), "********");
+        assert_eq!(mask_account_number("short"),    "*****");
     }
 
     #[test]

@@ -429,12 +429,18 @@ async fn emit_reconciliation_events(
 mod tests {
     use super::super::discrepancy::*;
     use super::super::models::*;
+    use bigdecimal::BigDecimal;
     use chrono::NaiveDate;
+    use std::str::FromStr;
 
-    fn rec(reference: &str, amount: f64) -> StatementRecord {
+    fn bd(v: &str) -> BigDecimal {
+        BigDecimal::from_str(v).unwrap()
+    }
+
+    fn rec(reference: &str, amount: &str) -> StatementRecord {
         StatementRecord {
             reference:   reference.to_string(),
-            amount,
+            amount:      bd(amount),
             entry_type:  EntryType::Credit,
             date:        NaiveDate::from_ymd_opt(2025, 1, 15).unwrap(),
             description: None,
@@ -443,20 +449,20 @@ mod tests {
 
     #[test]
     fn matched_within_tolerance() {
-        assert_eq!(classify_amounts(100.00, 100.005), DiscrepancyType::Matched);
+        assert_eq!(classify_amounts(&bd("100.00"), &bd("100.005")), DiscrepancyType::Matched);
     }
 
     #[test]
     fn mismatch_beyond_tolerance() {
-        assert_eq!(classify_amounts(100.00, 100.02), DiscrepancyType::AmountMismatch);
+        assert_eq!(classify_amounts(&bd("100.00"), &bd("100.02")), DiscrepancyType::AmountMismatch);
     }
 
     #[test]
     fn duplicate_detection_in_engine_context() {
         let records = vec![
-            rec("TXN-1", 50.0),
-            rec("TXN-2", 75.0),
-            rec("TXN-1", 50.0),  // duplicate
+            rec("TXN-1", "50.00"),
+            rec("TXN-2", "75.00"),
+            rec("TXN-1", "50.00"),
         ];
         let dups = find_duplicates(&records);
         assert!(dups.contains_key("TXN-1"));

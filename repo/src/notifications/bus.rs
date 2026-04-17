@@ -420,7 +420,7 @@ async fn get_recipients(pool: &PgPool, event: &PendingEventRow) -> Result<Vec<Uu
 
 /// Returns `true` if a non-dismissed delivery for the same
 /// (user, event_type, source_entity_id) exists within the last 15 minutes.
-pub(crate) async fn check_duplicate(
+pub async fn check_duplicate(
     pool:             &PgPool,
     user_id:          Uuid,
     event_type:       &str,
@@ -461,7 +461,7 @@ pub(crate) async fn check_duplicate(
 ///   • dnd_enabled = TRUE with a time window, but that window is not currently open
 ///
 /// All-day DND (dnd_enabled = TRUE, both times NULL) keeps deliveries queued.
-pub(crate) async fn flush_dnd_queue(pool: &PgPool) -> Result<u64, sqlx::Error> {
+pub async fn flush_dnd_queue(pool: &PgPool) -> Result<u64, sqlx::Error> {
     let rows = sqlx::query(
         r#"
         UPDATE notifications.deliveries

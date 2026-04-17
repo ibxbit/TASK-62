@@ -6,19 +6,22 @@
 /// Offline-first: if the fetch itself fails (network unavailable), the
 /// functions return an `Err` with a descriptive message so components can
 /// show an offline state rather than crashing.
-use gloo_net::http::{Request, Response};
+use gloo_net::http::{RequestBuilder, Response};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::store::auth_store::load_persisted_token;
 
-const API_BASE: &str = "";   // same origin — frontend is served by/proxied to the API
+// All backend calls go through `/api/...`.  nginx rewrites this to the API
+// container, which prevents the ambiguity between SPA routes (/notifications,
+// /alerts, /ops/…) and API endpoints with the same path.
+const API_BASE: &str = "/api";
 
 /// Build a request with the Bearer token header if a token is available.
 fn bearer_header() -> Option<String> {
     load_persisted_token().map(|t| format!("Bearer {}", t))
 }
 
-fn apply_auth(req: Request) -> Request {
+fn apply_auth(req: RequestBuilder) -> RequestBuilder {
     match bearer_header() {
         Some(h) => req.header("Authorization", &h),
         None    => req,
@@ -26,7 +29,9 @@ fn apply_auth(req: Request) -> Request {
 }
 
 pub async fn api_get<T: DeserializeOwned>(path: &str) -> Result<T, String> {
-    let req = apply_auth(Request::get(&format!("{}{}", API_BASE, path)));
+    let req = apply_auth(gloo_net::http::Request::get(&format!("{}{}", API_BASE, path)))
+        .build()
+        .map_err(|e| format!("Build error: {}", e))?;
     let resp = req.send().await.map_err(|e| format!("Network error: {}", e))?;
     parse_response(resp).await
 }
@@ -36,7 +41,7 @@ pub async fn api_post<B: Serialize, T: DeserializeOwned>(
     body: &B,
 ) -> Result<T, String> {
     let req = apply_auth(
-        Request::post(&format!("{}{}", API_BASE, path))
+        gloo_net::http::Request::post(&format!("{}{}", API_BASE, path))
             .header("Content-Type", "application/json"),
     );
     let req = req.json(body).map_err(|e| format!("Serialisation error: {}", e))?;
@@ -49,7 +54,7 @@ pub async fn api_put<B: Serialize, T: DeserializeOwned>(
     body: &B,
 ) -> Result<T, String> {
     let req = apply_auth(
-        Request::put(&format!("{}{}", API_BASE, path))
+        gloo_net::http::Request::put(&format!("{}{}", API_BASE, path))
             .header("Content-Type", "application/json"),
     );
     let req = req.json(body).map_err(|e| format!("Serialisation error: {}", e))?;
@@ -58,7 +63,9 @@ pub async fn api_put<B: Serialize, T: DeserializeOwned>(
 }
 
 pub async fn api_delete(path: &str) -> Result<(), String> {
-    let req = apply_auth(Request::delete(&format!("{}{}", API_BASE, path)));
+    let req = apply_auth(gloo_net::http::Request::delete(&format!("{}{}", API_BASE, path)))
+        .build()
+        .map_err(|e| format!("Build error: {}", e))?;
     let resp = req.send().await.map_err(|e| format!("Network error: {}", e))?;
     if resp.ok() {
         Ok(())
@@ -69,7 +76,7 @@ pub async fn api_delete(path: &str) -> Result<(), String> {
 
 pub async fn api_post_empty<T: DeserializeOwned>(path: &str) -> Result<T, String> {
     let req = apply_auth(
-        Request::post(&format!("{}{}", API_BASE, path))
+        gloo_net::http::Request::post(&format!("{}{}", API_BASE, path))
             .header("Content-Type", "application/json"),
     );
     let req = req.body("{}").map_err(|e| format!("Body error: {}", e))?;

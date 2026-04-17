@@ -13,11 +13,17 @@
 /// GET /audit/logs/{id}    get_log
 /// ```
 ///
-/// ## Retention
+/// ## Retention & Immutability
 ///
 /// Each row has a generated `retention_until` column (created_at + 7 years).
 /// Expired entries are visible via the `audit.expired_logs` view (migration 010)
 /// and can be purged by a scheduled job.
+///
+/// Immutability: The audit.audit_logs table is append-only. The DB role used by the app
+/// has only SELECT and INSERT privileges (no UPDATE/DELETE). This is enforced in migrations.
+///
+/// Retention enforcement: See db/migrations/010_audit_extensions.sql for the expired_logs view
+/// and purge guardrail. Purge jobs must use this view to avoid deleting in-window entries.
 pub mod handlers;
 pub mod writer;
 

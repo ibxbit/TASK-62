@@ -216,6 +216,7 @@ pub fn validate_and_parse(content: &[u8]) -> ParseResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     fn csv(body: &str) -> Vec<u8> {
         format!("date,ref,amount,type,description\n{}", body).into_bytes()
@@ -228,7 +229,7 @@ mod tests {
         assert!(r.is_valid, "{:?}", r.errors);
         assert_eq!(r.records.len(), 2);
         assert_eq!(r.records[0].reference, "TXN001");
-        assert!((r.records[0].amount - 100.5).abs() < 1e-9);
+        assert_eq!(r.records[0].amount, bigdecimal::BigDecimal::from_str("100.50").unwrap());
         assert_eq!(r.records[0].entry_type, EntryType::Credit);
         assert_eq!(r.records[1].entry_type, EntryType::Debit);
     }
@@ -285,7 +286,7 @@ mod tests {
         let content = csv("2025-01-15,TXN001,\"1,234.56\",credit,\n");
         let r = validate_and_parse(&content);
         assert!(r.is_valid, "{:?}", r.errors);
-        assert!((r.records[0].amount - 1234.56).abs() < 1e-6);
+        assert_eq!(r.records[0].amount, bigdecimal::BigDecimal::from_str("1234.56").unwrap());
     }
 
     #[test]

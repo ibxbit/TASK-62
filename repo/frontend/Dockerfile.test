@@ -1,0 +1,35 @@
+# =============================================================================
+# frontend/Dockerfile.test — wasm-pack runner image for Yew component tests.
+#
+# Used by `docker compose --profile test run --rm frontend-runner`, which
+# exercises frontend/tests/component_states.rs against a headless Firefox.
+# Kept separate from frontend/Dockerfile (which builds the production WASM
+# bundle for nginx) so the test image carries the browser binary and the
+# production image stays slim.
+# =============================================================================
+FROM rust:1.86-slim
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        curl pkg-config libssl-dev ca-certificates \
+        firefox-esr \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN rustup target add wasm32-unknown-unknown
+
+# wasm-pack drives the headless browser and packages the WASM artifacts.
+RUN curl -sSfL https://github.com/rustwasm/wasm-pack/releases/download/v0.13.0/wasm-pack-v0.13.0-x86_64-unknown-linux-musl.tar.gz \
+    | tar -xz -C /usr/local/bin --strip-components=1 \
+          wasm-pack-v0.13.0-x86_64-unknown-linux-musl/wasm-pack
+
+# Pre-bake geckodriver so tests don't need network at run time.  wasm-pack
+# looks it up under ~/.cache/.wasm-pack/geckodriver-<hash>/ — we install to
+# a well-known location and symlink both possible paths.
+RUN curl -sSfL https://github.com/mozilla/geckodriver/releases/download/v0.36.0/geckodriver-v0.36.0-linux64.tar.gz \
+    | tar -xz -C /usr/local/bin geckodriver \
+ && mkdir -p /root/.cache/.wasm-pack/geckodriver-e2e9056231d8a303 \
+ && cp /usr/local/bin/geckodriver /root/.cache/.wasm-pack/geckodriver-e2e9056231d8a303/geckodriver
+
+WORKDIR /app/frontend

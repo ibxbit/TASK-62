@@ -13,7 +13,7 @@
 ///   - Base64 encoder correctness (used in the file upload path)
 ///
 /// Run with:
-///   wasm-pack test --headless --firefox -- --test component_states
+///   wasm-pack test --headless --firefox -- --test component_states_spec
 use wasm_bindgen_test::*;
 
 wasm_bindgen_test_configure!(run_in_browser);
@@ -2592,11 +2592,15 @@ mod mounted_guard_integration {
         }
     }
 
-    fn mount<T: BaseComponent>() -> web_sys::Element {
+    fn mount<T: BaseComponent>() -> web_sys::Element
+    where
+        T: BaseComponent,
+        T::Properties: Default,
+    {
         let document = window().unwrap().document().unwrap();
         let root = document.create_element("div").unwrap();
         document.body().unwrap().append_child(&root).unwrap();
-        yew::Renderer::<T>::with_root(root.clone()).render();
+        yew::Renderer::<T>::with_root_and_props(root.clone(), T::Properties::default()).render();
         root
     }
 
@@ -2636,22 +2640,37 @@ mod mounted_guard_integration {
         }
     }
 
+    async fn yield_to_render() {
+        // Yew renders asynchronously via `queue_microtask`.  Two yields are
+        // enough to let the full render tree commit.
+        for _ in 0..10 {
+            gloo_timers::future::TimeoutFuture::new(5).await;
+        }
+    }
+
     #[wasm_bindgen_test]
-    fn role_guard_renders_children_for_admin_when_mounted() {
+    async fn role_guard_renders_children_for_admin_when_mounted() {
         let root = mount::<AdminAllowedHarness>();
+        yield_to_render().await;
         let html = root.inner_html();
-        assert!(html.contains("ALLOWED_MARKER"));
+        assert!(
+            html.contains("ALLOWED_MARKER"),
+            "expected ALLOWED_MARKER in rendered DOM, got: {html}"
+        );
         assert!(!html.contains("403 — Access Denied"));
         root.remove();
     }
 
     #[wasm_bindgen_test]
-    fn role_guard_shows_forbidden_for_dispatcher_when_mounted() {
+    async fn role_guard_shows_forbidden_for_dispatcher_when_mounted() {
         let root = mount::<DispatcherForbiddenHarness>();
+        yield_to_render().await;
         let html = root.inner_html();
-        assert!(html.contains("403 — Access Denied"));
+        assert!(
+            html.contains("403 — Access Denied"),
+            "expected forbidden marker, got: {html}"
+        );
         assert!(!html.contains("SHOULD_NOT_RENDER"));
-        // Ensure Route enum path remains usable in mounted context.
         let _ = Route::Inbox;
         root.remove();
     }

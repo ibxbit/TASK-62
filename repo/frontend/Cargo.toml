@@ -17,7 +17,7 @@ gloo-net         = "0.5"
 gloo-timers      = "0.3"
 serde            = { version = "1",   features = ["derive"] }
 serde_json       = "1"
-uuid             = { version = "1",   features = ["serde", "v4"] }
+uuid             = { version = "1",   features = ["serde", "v4", "js"] }
 chrono           = { version = "0.4", features = ["serde", "wasmbind"] }
 wasm-bindgen-futures = "0.4"
 web-sys          = { version = "0.3", features = [
@@ -34,8 +34,32 @@ console_log      = "1"
 wasm-bindgen-test = "0.3"
 
 [[test]]
-name    = "component_states"
-path    = "tests/component_states.rs"
+name    = "component_states_spec"
+path    = "tests/component_states.spec.rs"
+
+[[test]]
+name    = "notification_logic_spec"
+path    = "tests/notification_logic.spec.rs"
+
+[[test]]
+name    = "service_contracts_spec"
+path    = "tests/service_contracts.spec.rs"
+
+[[test]]
+name    = "dispatcher_workflows_spec"
+path    = "tests/dispatcher_workflows.spec.rs"
+
+[[test]]
+name    = "inbox_panel_spec"
+path    = "tests/inbox_panel.spec.rs"
+
+[[test]]
+name    = "api_service_spec"
+path    = "tests/api_service.spec.rs"
+
+[[test]]
+name    = "role_guard_spec"
+path    = "tests/role_guard.spec.rs"
 
 [profile.release]
 opt-level     = "z"   # minimise wasm binary size

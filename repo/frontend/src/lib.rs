@@ -1,6 +1,6 @@
 /// Library entry point for integration tests.
 ///
-/// Exposes only the `types` module so that `tests/component_states.rs` can
+/// Exposes only the `types` module so that `tests/component_states.spec.rs` can
 /// import real production types (SessionInfo, RolloutPlan, OpsRoute, etc.)
 /// instead of synthetic local definitions.  Only `types` is exposed here
 /// because it contains no WASM/browser-specific code and compiles for all

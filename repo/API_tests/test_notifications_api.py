@@ -41,9 +41,16 @@ class TestNotificationsList:
         r = api("GET", "/notifications", token=admin_token)
         assert r.status_code == 200
 
-    def test_list_returns_array(self, api, admin_token):
-        body = api("GET", "/notifications", token=admin_token).json()
+    def test_list_returns_array_of_delivery_items(self, api, admin_token):
+        """Every item must carry the inbox contract fields."""
+        r = api("GET", "/notifications", token=admin_token, params={"status": "all"})
+        assert r.status_code == 200
+        body = r.json()
         assert isinstance(body, list)
+        for item in body:
+            for field in ("id", "event_type", "severity", "status", "payload", "created_at"):
+                assert field in item, f"inbox item missing {field!r}: {item!r}"
+            assert item["status"] in ("queued", "delivered", "read", "dismissed")
 
     def test_list_unauthenticated_returns_401(self, api):
         r = api("GET", "/notifications")
@@ -76,23 +83,18 @@ class TestNotificationsList:
 
 
 class TestUnreadCount:
-    def test_unread_count_returns_200(self, api, admin_token):
+    def test_unread_count_response_contract(self, api, admin_token):
         r = api("GET", "/notifications/unread-count", token=admin_token)
         assert r.status_code == 200
-
-    def test_unread_count_has_expected_fields(self, api, admin_token):
-        body = api("GET", "/notifications/unread-count", token=admin_token).json()
-        assert "unread" in body
-        assert "queued" in body
-
-    def test_unread_count_values_are_non_negative(self, api, admin_token):
-        body = api("GET", "/notifications/unread-count", token=admin_token).json()
-        assert body["unread"] >= 0
-        assert body["queued"] >= 0
+        body = r.json()
+        assert isinstance(body, dict)
+        assert "unread" in body and isinstance(body["unread"], int) and body["unread"] >= 0
+        assert "queued" in body and isinstance(body["queued"], int) and body["queued"] >= 0
 
     def test_unread_count_unauthenticated_returns_401(self, api):
         r = api("GET", "/notifications/unread-count")
         assert r.status_code == 401
+        assert r.json().get("code") == "UNAUTHORIZED"
 
 
 class TestMarkRead:
@@ -191,9 +193,10 @@ class TestSubscriptions:
         assert r.status_code == 200
 
     def test_staff_can_list_own_subscriptions(self, api, staff_token):
+        """staff_user can list their own subscriptions (own-resource, not manage)."""
         r = api("GET", "/notifications/subscriptions", token=staff_token)
-        assert r.status_code == 401 or r.status_code == 200
-        # staff_user lacks NotificationsSubscriptionsManage — depends on exact permission mapping
+        assert r.status_code == 200
+        assert isinstance(r.json(), list)
 
 
 # ── Notification Rules ────────────────────────────────────────────────────────
@@ -220,16 +223,18 @@ class TestNotificationRules:
                 })
         assert r.status_code in (200, 201)
 
-    def test_create_rule_returns_id(self, api, admin_token):
+    def test_create_rule_returns_id_and_fields(self, api, admin_token):
         r = api("POST", "/notifications/rules", token=admin_token,
                 json={
                     "rule_name": "api_test_rule_id_check",
                     "rule_type": "keyword",
                     "config": {"keywords": ["test"]},
                 })
-        if r.status_code in (200, 201):
-            body = r.json()
-            assert "id" in body
+        assert r.status_code in (200, 201), r.text
+        body = r.json()
+        assert "id" in body
+        uuid.UUID(body["id"])
+        assert body.get("rule_name") == "api_test_rule_id_check"
 
     def test_create_rule_missing_name_returns_error(self, api, admin_token):
         r = api("POST", "/notifications/rules", token=admin_token,

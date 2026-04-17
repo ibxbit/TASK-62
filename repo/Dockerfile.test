@@ -1,0 +1,41 @@
+# =============================================================================
+# Dockerfile.test — Python test runner for TransitOps
+#
+# Builds a self-contained image that has Python 3.12, every dependency listed
+# in requirements.txt, and a non-root user. Used for unit, API, and integration
+# Python tests so that no host Python or pip install is required.
+#
+# The image deliberately does NOT contain Rust, wasm-pack, or browser binaries.
+# Frontend (wasm-pack) and end-to-end (Playwright) tests run in their own
+# purpose-built images so that each layer stays small and builds in parallel.
+# =============================================================================
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# curl is needed by run_tests.sh to probe the API readiness endpoint.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+# Install Python deps in a dedicated layer for Docker cache reuse.
+COPY requirements.txt ./
+RUN pip install --default-timeout=120 -r requirements.txt
+
+# Copy the rest of the project. Test files (unit_tests/, API_tests/,
+# run_tests.sh) and source live alongside one another at the repo root.
+COPY . .
+
+RUN chmod +x run_tests.sh
+
+# The script self-detects that it is running inside a container via
+# IN_CONTAINER=1 and skips the docker-compose orchestration loop.
+ENV IN_CONTAINER=1
+
+ENTRYPOINT ["./run_tests.sh"]
+CMD ["all-python"]

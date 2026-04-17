@@ -1,24 +1,24 @@
-
+# =============================================================================
+# TransitOps service stack.
+#
+# Default profile (no --profile flag): runs the production-shaped api + db
+# pair on persistent data — what `docker compose up` gives you.
+#
+# `test` profile: brings up an isolated, throwaway db-test + api-test pair
+# plus the Python and Playwright test runners.  Nothing in this profile
+# touches the dev `db` or `api` volumes / state, so integration and E2E
+# tests can run anywhere (including CI) without polluting developer data.
+#
+# Run a category from the host with:
+#   ./run_tests.sh unit | api | integration | frontend | e2e | all
+# =============================================================================
 
 services:
-  # ── Test Runner ──────────────────────────────────────────────────────────
-  test:
-    image: python:3.12-slim
-    depends_on:
-      db:
-        condition: service_healthy
-      api:
-        condition: service_started
-    volumes:
-      - .:/workspace
-    working_dir: /workspace
-    environment:
-      DATABASE_URL: postgresql://transitops_app:transitops_secret@db:5432/transitops
-      ENCRYPTION_KEY: 6befdbda636469a7c848628e9b461069143c2ba97afae89b88947814ce123ec3
-      API_URL: "http://api:8081"
-    entrypoint: ["/bin/bash", "-c", "apt-get update && apt-get install -y curl && pip install --default-timeout=120 -r requirements.txt && chmod +x run_tests.sh && ./run_tests.sh"]
+  # ──────────────────────────────────────────────────────────────────────────
+  # Default (developer) services
+  # ──────────────────────────────────────────────────────────────────────────
 
-  # ── PostgreSQL 16 ──────────────────────────────────────────────────────────
+  # ── PostgreSQL 16 (developer/persistent) ──────────────────────────────────
   db:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -44,7 +44,7 @@ services:
       retries: 15
       start_period: 10s
 
-  # ── TransitOps API ─────────────────────────────────────────────────────────
+  # ── TransitOps API (developer) ────────────────────────────────────────────
   api:
     build:
       context: .
@@ -63,6 +63,178 @@ services:
       db:
         condition: service_healthy
 
+  # ──────────────────────────────────────────────────────────────────────────
+  # Test profile — fully isolated from the developer stack above.
+  # ──────────────────────────────────────────────────────────────────────────
+
+  # ── Disposable PostgreSQL for tests ──────────────────────────────────────
+  # No volume binding for /var/lib/postgresql/data → data lives in the
+  # container layer only and dies with `docker compose down`.  tmpfs keeps
+  # it fast on CI.  Schema + seeds are re-applied on every fresh start.
+  db-test:
+    image: postgres:16-alpine
+    profiles: ["test"]
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=512m
+    environment:
+      POSTGRES_USER:     transitops_app
+      POSTGRES_PASSWORD: transitops_secret
+      POSTGRES_DB:       transitops
+    volumes:
+      - ./db/init/00_init.sh:/docker-entrypoint-initdb.d/00_init.sh:ro
+      - ./db:/opt/transitops/db:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U transitops_app -d transitops"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+  # ── TransitOps API pointed at the disposable test DB ─────────────────────
+  api-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["test"]
+    environment:
+      DATABASE_URL:   postgres://transitops_app:transitops_secret@db-test:5432/transitops
+      ENCRYPTION_KEY: 6befdbda636469a7c848628e9b461069143c2ba97afae89b88947814ce123ec3
+      SERVER_HOST:    0.0.0.0
+      SERVER_PORT:    "8081"
+      RUST_LOG:       info
+    depends_on:
+      db-test:
+        condition: service_healthy
+    healthcheck:
+      # The runtime image is debian-slim with no curl/wget; bash's /dev/tcp
+      # check is enough to confirm the API has bound port 8081.  The test
+      # runners do the deeper /auth/session readiness probe themselves.
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/127.0.0.1/8081"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  # ── Yew frontend served by nginx, reverse-proxying API XHRs to api-test ─
+  frontend-test:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    profiles: ["test"]
+    depends_on:
+      api-test:
+        condition: service_healthy
+    healthcheck:
+      # nginx:alpine ships BusyBox wget, which works for a basic 200 check.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/index.html"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  # ── Python test runner (unit + API + integration) ────────────────────────
+  # Driven by run_tests.sh inside the container.  The CMD selects which
+  # category to execute; `docker compose run --rm test-runner unit` etc.
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    profiles: ["test"]
+    depends_on:
+      db-test:
+        condition: service_healthy
+      api-test:
+        condition: service_healthy
+    environment:
+      DATABASE_URL:   postgresql://transitops_app:transitops_secret@db-test:5432/transitops
+      ENCRYPTION_KEY: 6befdbda636469a7c848628e9b461069143c2ba97afae89b88947814ce123ec3
+      API_URL:        http://api-test:8081
+      IN_CONTAINER:   "1"
+
+  # ── Yew/wasm-pack component test runner (frontend/tests/*) ──────────────
+  # Headless Firefox driven by wasm-pack — no host browser needed.
+  frontend-runner:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.test
+    profiles: ["test"]
+    working_dir: /app/frontend
+    volumes:
+      - .:/app
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_target_frontend:/app/frontend/target
+    environment:
+      # WASM compilation is memory-heavy; serialise jobs so Docker Desktop's
+      # default ~2 GiB container budget doesn't OOM-kill the process.
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      RUSTFLAGS: "-C codegen-units=1 -C opt-level=0"
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -e
+        for t in component_states_spec notification_logic_spec service_contracts_spec \
+                 dispatcher_workflows_spec inbox_panel_spec api_service_spec role_guard_spec; do
+          echo "── running $$t ──"
+          wasm-pack test --headless --firefox -- --test "$$t"
+        done
+
+  # ── Rust integration test runner (tests/*.rs) ────────────────────────────
+  # Uses the same Rust toolchain image we vendor for builds.  Joins the test
+  # network so it can talk to db-test for any DB-backed integration tests.
+  integration-runner:
+    image: rust:1.88-slim
+    profiles: ["test"]
+    depends_on:
+      db-test:
+        condition: service_healthy
+    working_dir: /app
+    volumes:
+      - .:/app
+      - cargo_cache:/usr/local/cargo/registry
+      - cargo_target:/app/target
+    environment:
+      DATABASE_URL:   postgres://transitops_app:transitops_secret@db-test:5432/transitops
+      ENCRYPTION_KEY: 6befdbda636469a7c848628e9b461069143c2ba97afae89b88947814ce123ec3
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        set -e
+        apt-get update >/dev/null
+        apt-get install -y --no-install-recommends pkg-config libssl-dev ca-certificates >/dev/null
+        # --release is too memory-hungry under Docker Desktop's default memory.
+        # Debug build still exercises the same handlers against the real db-test.
+        cargo test --tests --no-fail-fast --jobs 1 -- --test-threads=1
+
+  # ── Playwright browser automation ────────────────────────────────────────
+  e2e:
+    build:
+      context: ./e2e
+      dockerfile: Dockerfile
+    profiles: ["test"]
+    depends_on:
+      api-test:
+        condition: service_healthy
+      frontend-test:
+        condition: service_healthy
+    environment:
+      BASE_URL: http://frontend-test:80
+      CI:       "1"
+    # Allow Chromium's sandbox to talk to the container's userns helpers.
+    ipc: host
+    volumes:
+      # Surfaces playwright-report/ + traces/ on the host for CI artifact upload.
+      - ./e2e/playwright-report:/e2e/playwright-report
+
 volumes:
   transitops_db_data:
+    driver: local
+  cargo_cache:
+    driver: local
+  cargo_target:
+    driver: local
+  cargo_target_frontend:
     driver: local

@@ -111,21 +111,30 @@ class TestListAlerts:
 # ── Alert stats ────────────────────────────────────────────────────────────────
 
 class TestAlertStats:
-    def test_stats_returns_200(self, api, admin_token, test_user_ids):
+    """The /alerts/stats response must have the aggregated-counts contract."""
+
+    def test_stats_returns_full_contract(self, api, admin_token, test_user_ids):
         r = api("GET", "/alerts/stats", token=admin_token)
         assert r.status_code == 200
+        body = r.json()
+        assert isinstance(body, dict)
+        # Contract — these keys are always present.
+        for key in ("by_severity", "by_status", "open_total"):
+            assert key in body, f"missing key {key!r} in /alerts/stats body: {body!r}"
+        assert isinstance(body["by_severity"], dict)
+        assert isinstance(body["by_status"], dict)
+        assert isinstance(body["open_total"], int)
+        assert body["open_total"] >= 0
 
     def test_stats_unauthenticated_returns_401(self, api):
         r = api("GET", "/alerts/stats")
         assert r.status_code == 401
+        assert r.json().get("code") == "UNAUTHORIZED"
 
     def test_staff_cannot_access_stats(self, api, staff_token, test_user_ids):
         r = api("GET", "/alerts/stats", token=staff_token)
         assert r.status_code == 403
-
-    def test_stats_returns_object(self, api, admin_token, test_user_ids):
-        body = api("GET", "/alerts/stats", token=admin_token).json()
-        assert isinstance(body, dict)
+        assert r.json().get("code") == "FORBIDDEN"
 
     def test_finance_can_access_stats(self, api, finance_token, test_user_ids):
         r = api("GET", "/alerts/stats", token=finance_token)
@@ -138,14 +147,19 @@ class TestGetAlert:
     def test_nonexistent_alert_returns_404(self, api, admin_token, test_user_ids):
         r = api("GET", f"/alerts/{NON_EXISTENT_ID}", token=admin_token)
         assert r.status_code == 404
+        body = r.json()
+        assert body.get("code") == "NOT_FOUND"
+        assert "Alert" in body.get("error", "") or "not found" in body.get("error", "").lower()
 
     def test_unauthenticated_returns_401(self, api):
         r = api("GET", f"/alerts/{NON_EXISTENT_ID}")
         assert r.status_code == 401
+        assert r.json().get("code") == "UNAUTHORIZED"
 
     def test_staff_cannot_get_alert(self, api, staff_token, test_user_ids):
         r = api("GET", f"/alerts/{NON_EXISTENT_ID}", token=staff_token)
         assert r.status_code == 403
+        assert r.json().get("code") == "FORBIDDEN"
 
 
 # ── Acknowledge alert ─────────────────────────────────────────────────────────
@@ -177,16 +191,18 @@ class TestAcknowledgeAlert:
                 token=dispatcher_token, json={})
         assert r.status_code == 403
 
-    def test_admin_can_attempt_acknowledge(self, api, admin_token, test_user_ids):
+    def test_admin_acknowledge_nonexistent_returns_404(self, api, admin_token, test_user_ids):
+        """Admin has AlertsManage; non-existent alert → 404 NOT_FOUND, not 403."""
         r = api("POST", f"/alerts/{NON_EXISTENT_ID}/acknowledge",
                 token=admin_token, json={})
-        # 404 means permission check passed; 403 means denied
-        assert r.status_code != 403
+        assert r.status_code == 404
+        assert r.json().get("code") == "NOT_FOUND"
 
-    def test_finance_can_attempt_acknowledge(self, api, finance_token, test_user_ids):
+    def test_finance_acknowledge_nonexistent_returns_404(self, api, finance_token, test_user_ids):
         r = api("POST", f"/alerts/{NON_EXISTENT_ID}/acknowledge",
                 token=finance_token, json={})
-        assert r.status_code != 403
+        assert r.status_code == 404
+        assert r.json().get("code") == "NOT_FOUND"
 
 
 # ── Close alert ────────────────────────────────────────────────────────────────
@@ -217,15 +233,17 @@ class TestCloseAlert:
                 token=dispatcher_token, json={})
         assert r.status_code == 403
 
-    def test_admin_can_attempt_close(self, api, admin_token, test_user_ids):
+    def test_admin_close_nonexistent_returns_404(self, api, admin_token, test_user_ids):
         r = api("POST", f"/alerts/{NON_EXISTENT_ID}/close",
                 token=admin_token, json={})
-        assert r.status_code != 403
+        assert r.status_code == 404
+        assert r.json().get("code") == "NOT_FOUND"
 
-    def test_finance_can_attempt_close(self, api, finance_token, test_user_ids):
+    def test_finance_close_nonexistent_returns_404(self, api, finance_token, test_user_ids):
         r = api("POST", f"/alerts/{NON_EXISTENT_ID}/close",
                 token=finance_token, json={})
-        assert r.status_code != 403
+        assert r.status_code == 404
+        assert r.json().get("code") == "NOT_FOUND"
 
 
 # ── Alert lifecycle (if alerts exist) ────────────────────────────────────────

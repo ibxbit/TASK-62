@@ -75,11 +75,29 @@ def assert_reauth_required(r):
     )
 
 
-def assert_reauth_passed(r):
-    """Assert response is NOT 403 — reauth gate was satisfied."""
-    assert r.status_code != 403, (
-        f"Expected non-403 after reauth, got {r.status_code}: {r.text}"
+def assert_reauth_passed(r, *, expected: tuple[int, ...]):
+    """Assert the reauth gate opened AND the downstream endpoint returned
+    exactly one of the specified expected codes.
+
+    Distinction from the old `!= 403` check: we now demand a positive match
+    inside `expected`, so a silent change (e.g. 5xx leak) will fail the test
+    instead of being swallowed by the broad "any non-403".  Every call site
+    supplies the deterministic list the caller expects after the gate opens.
+    """
+    assert r.status_code in expected, (
+        f"After reauth, expected one of {expected}, got {r.status_code}: {r.text[:200]}"
     )
+    # Defensive: the old non-403 invariant is now guaranteed by the tuple check.
+    if 403 in expected:
+        raise AssertionError(
+            "expected=(...) must not include 403 — that's what the gate blocks"
+        )
+    # All JSON error envelopes must have a code string when not 2xx.
+    if r.status_code >= 400:
+        body = r.json()
+        assert isinstance(body, dict) and "code" in body, (
+            f"Non-2xx response must include error code envelope: {body!r}"
+        )
 
 
 # ── Ops config — publish ─────────────────────────────────────────────────────
@@ -92,10 +110,17 @@ class TestPublishReauth:
         r = api("POST", self._path, token=token)
         assert_reauth_required(r)
 
-    def test_publish_after_reauth_passes_reauth_gate(self, api, test_user_ids):
+    def test_publish_after_reauth_rejects_nonexistent_version(self, api, test_user_ids):
+        """After reauth, the handler looks up the version.  The current backend
+        responds 400 BAD_REQUEST with message 'Version not found or is not in
+        draft/scheduled status' (it folds the state-machine + existence check
+        into a single rejection).  This freezes that contract."""
         token = _fresh_token_with_reauth(api, "admin")
         r = api("POST", self._path, token=token)
-        assert_reauth_passed(r)
+        assert_reauth_passed(r, expected=(400,))
+        body = r.json()
+        assert body.get("code") == "BAD_REQUEST"
+        assert "Version" in body.get("error", "")
 
 
 class TestUnpublishReauth:
@@ -106,10 +131,13 @@ class TestUnpublishReauth:
         r = api("POST", self._path, token=token)
         assert_reauth_required(r)
 
-    def test_unpublish_after_reauth_passes_reauth_gate(self, api, test_user_ids):
+    def test_unpublish_after_reauth_rejects_nonexistent_version(self, api, test_user_ids):
+        """Same folded contract as publish — 400 BAD_REQUEST for unknown version."""
         token = _fresh_token_with_reauth(api, "admin")
         r = api("POST", self._path, token=token)
-        assert_reauth_passed(r)
+        assert_reauth_passed(r, expected=(400,))
+        body = r.json()
+        assert body.get("code") == "BAD_REQUEST"
 
 
 class TestScheduleVersionReauth:
@@ -123,13 +151,15 @@ class TestScheduleVersionReauth:
                 json={"effective_from": future})
         assert_reauth_required(r)
 
-    def test_schedule_after_reauth_passes_reauth_gate(self, api, test_user_ids):
+    def test_schedule_after_reauth_returns_404_or_400(self, api, test_user_ids):
+        """After reauth, the handler validates + looks up — either 404 (no such
+        version) or 400 (validation failure) is contract-compliant."""
         import datetime
         token = _fresh_token_with_reauth(api, "admin")
         future = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)).isoformat().replace("+00:00", "Z")
         r = api("POST", self._path, token=token,
                 json={"effective_from": future})
-        assert_reauth_passed(r)
+        assert_reauth_passed(r, expected=(400, 404))
 
 
 class TestRolloutReauth:
@@ -141,11 +171,11 @@ class TestRolloutReauth:
                 json={"stages": [{"target_percentage": 100, "depot_ids": [NON_EXISTENT_ID]}]})
         assert_reauth_required(r)
 
-    def test_rollout_after_reauth_passes_reauth_gate(self, api, test_user_ids):
+    def test_rollout_after_reauth_returns_404_or_400(self, api, test_user_ids):
         token = _fresh_token_with_reauth(api, "admin")
         r = api("POST", self._path, token=token,
                 json={"stages": [{"target_percentage": 100, "depot_ids": [NON_EXISTENT_ID]}]})
-        assert_reauth_passed(r)
+        assert_reauth_passed(r, expected=(400, 404))
 
 
 # ── Reconciliation — start run ────────────────────────────────────────────────
@@ -160,14 +190,15 @@ class TestReconciliationRunReauth:
                 })
         assert_reauth_required(r)
 
-    def test_start_run_after_reauth_passes_reauth_gate(self, api, test_user_ids):
+    def test_start_run_after_reauth_returns_400_or_404(self, api, test_user_ids):
+        """After reauth finance can start a run; missing statement → 400/404."""
         token = _fresh_token_with_reauth(api, "finance")
         r = api("POST", "/reconciliation/runs", token=token,
                 json={
                     "statement_import_id": NON_EXISTENT_ID,
                     "run_date": "2024-01-15",
                 })
-        assert_reauth_passed(r)
+        assert_reauth_passed(r, expected=(400, 404, 422))
 
 
 # ── Reporting — metric create/update/delete ───────────────────────────────────
@@ -179,13 +210,15 @@ class TestMetricCreateReauth:
                 json={"metric_key": "test", "display_name": "Test", "formula_type": "custom_sql"})
         assert_reauth_required(r)
 
-    def test_create_metric_after_reauth_passes_reauth_gate(self, api, test_user_ids):
+    def test_create_metric_after_reauth_creates_or_validates(self, api, test_user_ids):
+        """After reauth the admin can submit a metric create request; accepted
+        outcomes are 201 (created) or 400/422 (validation)."""
         token = _fresh_token_with_reauth(api, "admin")
         r = api("POST", "/reporting/metrics", token=token,
                 json={"metric_key": f"test_{uuid.uuid4().hex[:8]}",
                       "display_name": "Test Metric",
                       "formula_type": "custom_sql"})
-        assert_reauth_passed(r)
+        assert_reauth_passed(r, expected=(200, 201, 400, 422))
 
 
 class TestMetricUpdateReauth:
@@ -195,11 +228,11 @@ class TestMetricUpdateReauth:
                 json={"display_name": "Updated"})
         assert_reauth_required(r)
 
-    def test_update_metric_after_reauth_passes_reauth_gate(self, api, test_user_ids):
+    def test_update_metric_after_reauth_returns_404_for_nonexistent(self, api, test_user_ids):
         token = _fresh_token_with_reauth(api, "admin")
         r = api("PUT", f"/reporting/metrics/{NON_EXISTENT_ID}", token=token,
                 json={"display_name": "Updated"})
-        assert_reauth_passed(r)
+        assert_reauth_passed(r, expected=(400, 404))
 
 
 class TestMetricDeleteReauth:
@@ -208,10 +241,10 @@ class TestMetricDeleteReauth:
         r = api("DELETE", f"/reporting/metrics/{NON_EXISTENT_ID}", token=token)
         assert_reauth_required(r)
 
-    def test_delete_metric_after_reauth_passes_reauth_gate(self, api, test_user_ids):
+    def test_delete_metric_after_reauth_returns_404_for_nonexistent(self, api, test_user_ids):
         token = _fresh_token_with_reauth(api, "admin")
         r = api("DELETE", f"/reporting/metrics/{NON_EXISTENT_ID}", token=token)
-        assert_reauth_passed(r)
+        assert_reauth_passed(r, expected=(204, 404))
 
 
 # ── Reporting — schedule create/update/delete ─────────────────────────────────
@@ -223,13 +256,13 @@ class TestScheduleCreateReauth:
                 json={"name": "Test", "metric_ids": [NON_EXISTENT_ID], "schedule": "daily"})
         assert_reauth_required(r)
 
-    def test_create_schedule_after_reauth_passes_reauth_gate(self, api, test_user_ids):
+    def test_create_schedule_after_reauth_creates_or_validates(self, api, test_user_ids):
         token = _fresh_token_with_reauth(api, "admin")
         r = api("POST", "/reporting/schedules", token=token,
                 json={"name": f"Test {uuid.uuid4().hex[:6]}",
                       "metric_ids": [NON_EXISTENT_ID],
                       "schedule": "daily"})
-        assert_reauth_passed(r)
+        assert_reauth_passed(r, expected=(200, 201, 400, 422))
 
 
 class TestScheduleDeleteReauth:
@@ -238,10 +271,10 @@ class TestScheduleDeleteReauth:
         r = api("DELETE", f"/reporting/schedules/{NON_EXISTENT_ID}", token=token)
         assert_reauth_required(r)
 
-    def test_delete_schedule_after_reauth_passes_reauth_gate(self, api, test_user_ids):
+    def test_delete_schedule_after_reauth_returns_404_for_nonexistent(self, api, test_user_ids):
         token = _fresh_token_with_reauth(api, "admin")
         r = api("DELETE", f"/reporting/schedules/{NON_EXISTENT_ID}", token=token)
-        assert_reauth_passed(r)
+        assert_reauth_passed(r, expected=(204, 404))
 
 
 # ── Reporting — trigger run / export ─────────────────────────────────────────
@@ -252,10 +285,10 @@ class TestTriggerRunReauth:
         r = api("POST", f"/reporting/schedules/{NON_EXISTENT_ID}/trigger", token=token)
         assert_reauth_required(r)
 
-    def test_trigger_run_after_reauth_passes_reauth_gate(self, api, test_user_ids):
+    def test_trigger_run_after_reauth_returns_404_for_nonexistent(self, api, test_user_ids):
         token = _fresh_token_with_reauth(api, "admin")
         r = api("POST", f"/reporting/schedules/{NON_EXISTENT_ID}/trigger", token=token)
-        assert_reauth_passed(r)
+        assert_reauth_passed(r, expected=(400, 404))
 
 
 class TestExportRunReauth:
@@ -265,8 +298,8 @@ class TestExportRunReauth:
                 params={"format": "csv"})
         assert_reauth_required(r)
 
-    def test_export_run_after_reauth_passes_reauth_gate(self, api, test_user_ids):
+    def test_export_run_after_reauth_returns_404_for_nonexistent(self, api, test_user_ids):
         token = _fresh_token_with_reauth(api, "admin")
         r = api("GET", f"/reporting/runs/{NON_EXISTENT_ID}/export", token=token,
                 params={"format": "csv"})
-        assert_reauth_passed(r)
+        assert_reauth_passed(r, expected=(400, 404))

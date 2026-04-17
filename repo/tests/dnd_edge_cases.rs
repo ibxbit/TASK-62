@@ -177,10 +177,34 @@ async fn setup_db() -> sqlx::PgPool {
         .expect("Failed to connect to DB for tests")
 }
 
+/// Insert a minimal auth.users row so FK constraints on
+/// notifications.preferences / deliveries are satisfied.
+async fn ensure_user(pool: &sqlx::PgPool, user_id: uuid::Uuid) {
+    // Grab any seeded role_id for the FK.
+    let role_id: uuid::Uuid = sqlx::query_scalar!(
+        "SELECT id FROM auth.roles WHERE name = 'staff_user' LIMIT 1"
+    )
+    .fetch_one(pool)
+    .await
+    .expect("roles seed missing");
+    sqlx::query!(
+        "INSERT INTO auth.users (id, username, email_encrypted, password_hash, role_id, is_active)
+         VALUES ($1, $2, E'\\\\x00'::bytea, 'test_hash', $3, TRUE)
+         ON CONFLICT (id) DO NOTHING",
+        user_id,
+        format!("dnd_test_{}", user_id.simple()),
+        role_id,
+    )
+    .execute(pool)
+    .await
+    .expect("user insert");
+}
+
 #[tokio::test]
 async fn critical_event_bypasses_dnd_and_is_delivered_immediately() {
     let pool = setup_db().await;
     let user_id = uuid::Uuid::new_v4();
+    ensure_user(&pool, user_id).await;
 
     sqlx::query!(
         "INSERT INTO notifications.preferences (user_id, dnd_enabled, dnd_start, dnd_end)
@@ -228,6 +252,7 @@ async fn critical_event_bypasses_dnd_and_is_delivered_immediately() {
 async fn queued_deliveries_promoted_when_dnd_window_ends() {
     let pool = setup_db().await;
     let user_id = uuid::Uuid::new_v4();
+    ensure_user(&pool, user_id).await;
 
     sqlx::query!(
         "INSERT INTO notifications.preferences (user_id, dnd_enabled, dnd_start, dnd_end)
@@ -239,9 +264,10 @@ async fn queued_deliveries_promoted_when_dnd_window_ends() {
     .unwrap();
 
     let event_id = uuid::Uuid::new_v4();
+    // Use a seeded event_type so the FK check passes.
     sqlx::query!(
         "INSERT INTO notifications.events (id, event_type, source_domain, payload, processed_at)
-         VALUES ($1, 'test', 'sys', '{}', now())",
+         VALUES ($1, 'sys.announcement', 'sys', '{}', now())",
          event_id
     )
     .execute(&pool)

@@ -3,13 +3,13 @@
 /// All functions are async and return `Result<T, gloo_net::Error>`.
 /// The auth token is read via `load_persisted_token()` (same key used by
 /// `auth_store`) and sent as a Bearer header on every request.
-use gloo_net::http::Request;
+use gloo_net::http::{Request, RequestBuilder};
 use uuid::Uuid;
 
 use crate::store::auth_store::load_persisted_token;
 use crate::types::notification::{Notification, ReceiptRequest, UnreadCountResponse};
 
-const BASE: &str = "/notifications";
+const BASE: &str = "/api/notifications";
 
 // ── Auth header helper ────────────────────────────────────────────────────────
 
@@ -17,7 +17,7 @@ fn bearer() -> Option<String> {
     load_persisted_token().map(|t| format!("Bearer {}", t))
 }
 
-fn get(url: &str) -> Request {
+fn get(url: &str) -> RequestBuilder {
     let req = Request::get(url);
     match bearer() {
         Some(h) => req.header("Authorization", &h),
@@ -25,7 +25,7 @@ fn get(url: &str) -> Request {
     }
 }
 
-fn post(url: &str) -> Request {
+fn post(url: &str) -> RequestBuilder {
     let req = Request::post(url);
     match bearer() {
         Some(h) => req.header("Authorization", &h),
@@ -33,7 +33,8 @@ fn post(url: &str) -> Request {
     }
 }
 
-fn delete_req(url: &str) -> Request {
+#[allow(dead_code)]
+fn delete_req(url: &str) -> RequestBuilder {
     let req = Request::delete(url);
     match bearer() {
         Some(h) => req.header("Authorization", &h),
@@ -122,8 +123,7 @@ pub async fn send_receipt(ids: Vec<Uuid>) -> Result<u64, gloo_net::Error> {
 
     let body = ReceiptRequest { delivery_ids: ids };
     let resp = post(&format!("{}/receipt", BASE))
-        .json(&body)
-        .map_err(|e| gloo_net::Error::JsError(e.into()))?
+        .json(&body)?
         .send()
         .await?
         .json::<Resp>()

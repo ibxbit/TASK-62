@@ -117,11 +117,16 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
     use super::super::models::EntryType;
+    use std::str::FromStr;
+
+    fn bd(v: &str) -> BigDecimal {
+        BigDecimal::from_str(v).unwrap()
+    }
 
     fn rec(r: &str) -> StatementRecord {
         StatementRecord {
             reference:   r.to_string(),
-            amount:      100.0,
+            amount:      bd("100.00"),
             entry_type:  EntryType::Credit,
             date:        NaiveDate::from_ymd_opt(2025, 1, 15).unwrap(),
             description: None,
@@ -158,21 +163,21 @@ mod tests {
 
     #[test]
     fn classify_amounts_within_tolerance() {
-        assert_eq!(classify_amounts(100.00, 100.00), DiscrepancyType::Matched);
-        assert_eq!(classify_amounts(100.00, 100.01), DiscrepancyType::Matched);
-        assert_eq!(classify_amounts(100.00,  99.99), DiscrepancyType::Matched);
+        assert_eq!(classify_amounts(&bd("100.00"), &bd("100.00")), DiscrepancyType::Matched);
+        assert_eq!(classify_amounts(&bd("100.00"), &bd("100.01")), DiscrepancyType::Matched);
+        assert_eq!(classify_amounts(&bd("100.00"), &bd("99.99")),  DiscrepancyType::Matched);
     }
 
     #[test]
     fn classify_amounts_exceeds_tolerance() {
-        assert_eq!(classify_amounts(100.00, 100.02), DiscrepancyType::AmountMismatch);
-        assert_eq!(classify_amounts(100.00,  99.98), DiscrepancyType::AmountMismatch);
+        assert_eq!(classify_amounts(&bd("100.00"), &bd("100.02")), DiscrepancyType::AmountMismatch);
+        assert_eq!(classify_amounts(&bd("100.00"), &bd("99.98")),  DiscrepancyType::AmountMismatch);
     }
 
     #[test]
     fn net_discrepancy_positive_and_negative() {
-        assert!((net_discrepancy(100.0, 120.0) -  20.0).abs() < 1e-9);
-        assert!((net_discrepancy(100.0,  80.0) - -20.0).abs() < 1e-9);
+        assert_eq!(net_discrepancy(&bd("100.00"), &bd("120.00")), bd("20.00"));
+        assert_eq!(net_discrepancy(&bd("100.00"), &bd("80.00")),  bd("-20.00"));
     }
 
     #[test]

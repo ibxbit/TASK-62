@@ -299,7 +299,7 @@ mod tests {
         let lines = parse_csv(csv).unwrap();
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].transaction_ref.as_deref(), Some("TXN001"));
-        assert!((lines[0].amount - 100.5).abs() < 1e-9);
+        assert_eq!(lines[0].amount, bigdecimal::BigDecimal::from_str("100.50").unwrap());
         assert_eq!(lines[0].transaction_date, NaiveDate::from_ymd_opt(2025, 1, 15).unwrap());
         assert_eq!(lines[0].description.as_deref(), Some("Bus fare"));
         assert_eq!(lines[1].description, None);
@@ -318,7 +318,7 @@ mod tests {
         let csv = b"ref,amount,date\nTXN001,\"1,234.56\",2025-01-15\n";
         let lines = parse_csv(csv).unwrap();
         assert_eq!(lines.len(), 1);
-        assert!((lines[0].amount - 1234.56).abs() < 1e-6);
+        assert_eq!(lines[0].amount, bigdecimal::BigDecimal::from_str("1234.56").unwrap());
     }
 
     #[test]
@@ -327,7 +327,14 @@ mod tests {
         let lines = parse_json(json).unwrap();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].transaction_ref.as_deref(), Some("TXN001"));
-        assert!((lines[0].amount - 99.99).abs() < 1e-9);
+        // JSON doubles round-trip through f64, so tolerate sub-cent error.
+        let expected = bigdecimal::BigDecimal::from_str("99.99").unwrap();
+        let diff = (&lines[0].amount - &expected).abs();
+        assert!(
+            diff < bigdecimal::BigDecimal::from_str("0.0001").unwrap(),
+            "amount off by more than 0.0001: got {}",
+            lines[0].amount
+        );
     }
 
     #[test]

@@ -119,12 +119,34 @@ async fn setup_db() -> sqlx::PgPool {
         .expect("Failed to connect to DB for tests")
 }
 
+/// Create a real auth.users row so notifications.deliveries FKs are satisfied.
+async fn ensure_user(pool: &sqlx::PgPool, user_id: uuid::Uuid) {
+    let role_id: uuid::Uuid = sqlx::query_scalar!(
+        "SELECT id FROM auth.roles WHERE name = 'staff_user' LIMIT 1"
+    )
+    .fetch_one(pool)
+    .await
+    .expect("roles seed missing");
+    sqlx::query!(
+        "INSERT INTO auth.users (id, username, email_encrypted, password_hash, role_id, is_active)
+         VALUES ($1, $2, E'\\\\x00'::bytea, 'test_hash', $3, TRUE)
+         ON CONFLICT (id) DO NOTHING",
+        user_id,
+        format!("dedup_test_{}", user_id.simple()),
+        role_id,
+    )
+    .execute(pool)
+    .await
+    .expect("user insert");
+}
+
 #[tokio::test]
 async fn notification_dedup_same_user_entity_within_window_suppresses() {
     let pool = setup_db().await;
     let user_id = uuid::Uuid::new_v4();
     let entity_id = uuid::Uuid::new_v4();
     let event_id = uuid::Uuid::new_v4();
+    ensure_user(&pool, user_id).await;
 
     sqlx::query!(
         "INSERT INTO notifications.events (id, event_type, source_domain, source_entity_id, payload)
@@ -151,6 +173,7 @@ async fn notification_dedup_expires_after_window_creates_new_delivery() {
     let user_id = uuid::Uuid::new_v4();
     let entity_id = uuid::Uuid::new_v4();
     let event_id = uuid::Uuid::new_v4();
+    ensure_user(&pool, user_id).await;
 
     sqlx::query!(
         "INSERT INTO notifications.events (id, event_type, source_domain, source_entity_id, payload)
@@ -177,6 +200,7 @@ async fn notification_dedup_dismissed_delivery_not_counted() {
     let user_id = uuid::Uuid::new_v4();
     let entity_id = uuid::Uuid::new_v4();
     let event_id = uuid::Uuid::new_v4();
+    ensure_user(&pool, user_id).await;
 
     sqlx::query!(
         "INSERT INTO notifications.events (id, event_type, source_domain, source_entity_id, payload)
@@ -205,6 +229,8 @@ async fn notification_dedup_different_user_not_suppressed() {
     let user_b = uuid::Uuid::new_v4();
     let entity_id = uuid::Uuid::new_v4();
     let event_id = uuid::Uuid::new_v4();
+    ensure_user(&pool, user_a).await;
+    ensure_user(&pool, user_b).await;
 
     sqlx::query!(
         "INSERT INTO notifications.events (id, event_type, source_domain, source_entity_id, payload)
