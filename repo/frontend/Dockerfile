@@ -18,12 +18,21 @@ RUN apt-get update \
         curl pkg-config libssl-dev ca-certificates build-essential \
  && rm -rf /var/lib/apt/lists/*
 
-# wasm32 target + Trunk (build + bundle tool for WASM SPAs).
-RUN rustup target add wasm32-unknown-unknown
-RUN cargo install --locked trunk@0.20.3 \
+# wasm32 target + Trunk + wasm-bindgen (bundle tools for WASM SPAs).
+#
+# Trunk is installed from its prebuilt release tarball rather than
+# `cargo install --locked trunk` because compiling trunk's transitive dep
+# `minify-html-common` with `-C opt-level=3 -C codegen-units=1` requires
+# >2 GiB of RAM which Docker CI runners routinely don't have, causing
+# SIGKILL.  The prebuilt tarball is a single static binary — downloads in
+# seconds and uses no build memory.
+RUN rustup target add wasm32-unknown-unknown \
+ && curl -sSfL https://github.com/trunk-rs/trunk/releases/download/v0.20.3/trunk-x86_64-unknown-linux-gnu.tar.gz \
+        | tar -xz -C /usr/local/bin trunk \
  && curl -sSfL https://github.com/rustwasm/wasm-bindgen/releases/download/0.2.95/wasm-bindgen-0.2.95-x86_64-unknown-linux-musl.tar.gz \
         | tar -xz -C /usr/local/bin --strip-components=1 \
-              wasm-bindgen-0.2.95-x86_64-unknown-linux-musl/wasm-bindgen
+              wasm-bindgen-0.2.95-x86_64-unknown-linux-musl/wasm-bindgen \
+ && trunk --version && wasm-bindgen --version
 
 WORKDIR /app
 
