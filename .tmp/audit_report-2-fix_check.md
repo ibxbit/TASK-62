@@ -1,37 +1,35 @@
-# Previous Error Review: TransitOps Backend
+# Static Audit Fix Check - Report 2
 
-## Summary
-This report reviews the errors and issues encountered in previous test and build outputs for the current project, and checks if they have been resolved in the latest state.
+This follow-up checks whether baseline backend Partial Pass items from `audit_report-2.md` have been resolved in the current project state.
 
----
+## Recheck Results
 
-## 1. Previous Errors/Issues Found
+1. **DND edge-path coverage**
+- Result: Fixed
+- Evidence: `repo/unit_tests/test_dnd_logic.py`, `repo/tests/dnd_edge_cases.rs`
 
-### a. test_output.txt
-- Exit code 137 (container killed, likely OOM or manual stop)
-- No specific test failure or stack trace present.
+2. **Audit 7-year retention and immutability evidence**
+- Result: Fixed
+- Evidence: `repo/src/audit/mod.rs`, `repo/db/migrations/010_audit_extensions.sql`, `repo/db/schema.sql`
 
-### b. test_output2.txt
-- Only shows package installation and setup logs, no test failures or errors.
+3. **Env-driven channel adapter toggles**
+- Result: Fixed
+- Evidence: `repo/src/config.rs`, `repo/src/main.rs`, README static coverage notes
 
-### c. test_output3.txt
-- Only shows Docker build and setup logs, no test failures or errors.
+4. **Alert dedup and ack/close lifecycle evidence**
+- Result: Fixed
+- Evidence: `repo/unit_tests/test_alert_severity.py`, `repo/API_tests/test_alerting_api.py`
 
----
+5. **Documentation traceability for audit claims**
+- Result: Fixed
+- Evidence: `repo/README.md` and `repo/run_tests.sh` now contain explicit setup/test-category guidance
 
-## 2. Current Status
-- No evidence of Python or Rust test failures in the available logs.
-- No stack traces, assertion errors, or failed test output found in any of the .txt files.
-- The only error is an exit code 137, which is not a code/test defect but a container/system resource issue.
+## Additional Note on Previous Error Logs
 
----
+The previously observed `exit code 137` in older logs remains an operational/resource signal, not a confirmed code defect.
 
-## 3. Conclusion
-- All previously encountered errors in the available logs are either resolved or not related to code/test defects.
-- If you have additional error logs or specific stack traces, please provide them for further review.
+## Final Judgment
 
----
+All baseline Partial Pass items from report 2 are now resolved by static evidence.
 
-## 4. Recommendation
-- If exit code 137 persists, check system memory limits or Docker resource allocation.
-- Otherwise, the codebase appears free of test/build errors based on current evidence.
+**Fix-check verdict:** Pass.
